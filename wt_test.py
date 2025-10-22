@@ -119,10 +119,11 @@ th.sticky-col, td.sticky-col {position: sticky; left: 0; background-color: #fff;
     table {font-size: 8px;}
     th, td {padding: 1px;}
 }
-/* ▼ Streamlitフォーム要素の余白削除＋ラベル非表示 */
+/* ▼ Streamlitフォーム要素の余白削除＋ラベル非表示＋高さ縮小 */
 div[data-baseweb="radio"], div[data-baseweb="select"], div[data-baseweb="input"] {
     margin: 0 !important;
     padding: 0 !important;
+    height: auto !important;
 }
 div[data-baseweb="radio"] label, div[data-baseweb="select"] label, div[data-baseweb="input"] label {
     display: none !important;
@@ -208,7 +209,7 @@ else:
                     cell_content = f"<div class='current-data'>{temp:.1f}°C<br>{speed_kt}<br>{arrow_svg}</div>"
                     if not prev_row.empty:
                         prev_temp = prev_row.iloc[0]["t"]
-                        cell_content += f"<div class='prev-data'>(前年: {prev_temp:.1f}°C)</div>"
+                        cell_content += f"<div class='prev-data'>({prev_temp:.1f}°C)</div>"
                     cell = f"<td style='background-color:{color};'>{cell_content}</td>"
                 else:
                     cell = "<td>-</td>"
