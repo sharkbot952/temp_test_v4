@@ -89,25 +89,26 @@ def get_arrow_style(speed_mps):
     speed_kt = speed_mps * 1.94384
     if speed_kt < 1.0:
         return 18, "#0000FF"   # 青
-    elif speed_kt <= 2.0:
+    elif speed_kt <= 1.5:
         return 22, "#FFC107"   # 視認性の良い濃い黄色（元 #FFD700）
     else:
         return 26, "#FF0000"   # 赤
 
+
 def get_arrow_svg(direction_deg, speed_mps):
     if np.isnan(speed_mps) or np.isnan(direction_deg):
         return ""
-    css_angle = (direction_deg - 90) % 360  # SVG座標系に合わせて回転
+    css_angle = (direction_deg - 90) % 360
     size, color = get_arrow_style(speed_mps)
     line_end = size * 0.55
 
-    # 線幅を太く（stroke-width="3"）。必要なら 4 や 5 に変更可。
-    # 矢印ポリゴンに薄い縁取り（stroke="#333", stroke-width="0.8"）で背景とのコントラストを確保。
+    # シャフトのみ太く（例: 4px）、ヘッドは縁取りなし
     return f"""
     <svg width="{size}" height="{size}" style="transform: rotate({css_angle}deg);">
-        <line x1="4" y1="{size/2}" x2="{line_end}" y2="{size/2}" stroke="{color}" stroke-width="3"/>
+        <line x1="4" y1="{size/2}" x2="{line_end}" y2="{size/2}"
+              stroke="{color}" stroke-width="4" stroke-linecap="round"/>
         <polygon points="{line_end},{size/2 - arrow_half_height} {size},{size/2} {line_end},{size/2 + arrow_half_height}"
-                 fill="{color}" stroke="#333" stroke-width="0.8"/>
+                 fill="{color}"/>
     </svg>
     """
 
@@ -258,14 +259,5 @@ else:
 
         table_html += "</table></div>"
 
-        # 凡例（任意）
-        st.markdown("""
-        <div style="font-size:12px; margin:6px 0;">
-        <b>矢印色の凡例：</b>
-        <span style="color:#0000FF;">■ &lt; 1.0 kt（青）</span>　
-        <span style="color:#FFC107;">■ 1.0–2.0 kt（黄）</span>　
-        <span style="color:#FF0000;">■ &gt; 2.0 kt（赤）</span>
-        </div>
-        """, unsafe_allow_html=True)
 
         st.markdown(table_html, unsafe_allow_html=True)
