@@ -119,6 +119,14 @@ th.sticky-col, td.sticky-col {position: sticky; left: 0; background-color: #fff;
     table {font-size: 8px;}
     th, td {padding: 1px;}
 }
+/* ▼ Streamlitフォーム要素の余白削除＋ラベル非表示 */
+div[data-baseweb="radio"], div[data-baseweb="select"], div[data-baseweb="input"] {
+    margin: 0 !important;
+    padding: 0 !important;
+}
+div[data-baseweb="radio"] label, div[data-baseweb="select"] label, div[data-baseweb="input"] label {
+    display: none !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -144,7 +152,7 @@ else:
         merged_now["Date_day"] = merged_now["Date_JST"].dt.date
         depths = sorted(merged_now["Depth"].unique())
         dates = sorted(merged_now["Date_day"].unique())
-        selected_date = st.date_input("開始日", value=dates[0], min_value=dates[0], max_value=dates[-1])
+        selected_date = st.date_input("", value=dates[0], min_value=dates[0], max_value=dates[-1])
 
         df_prev = pd.DataFrame()
         if show_prev_year:
