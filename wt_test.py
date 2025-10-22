@@ -13,8 +13,7 @@ def load_uv_ts(folder):
     files_ts = glob.glob(os.path.join(folder, "t_s_*.csv"))
 
     def extract_depth(fname):
-        # Lv10.00 に対応
-        m = re.search(r"Lv([0-9.]+)", os.path.basename(fname))
+        m = re.search(r"Lv(\d+(?:\.\d+)?)", os.path.basename(fname))
         return float(m.group(1)) if m else np.nan
 
     uv_list, ts_list = [], []
@@ -24,28 +23,45 @@ def load_uv_ts(folder):
             df = pd.read_csv(f)
         except:
             continue
+        df = df.rename(columns=lambda x: x.strip())
         if "Date" not in df.columns:
             continue
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
         df["Depth"] = depth
         uv_list.append(df[["Date","Depth","u","v"]])
+
     for f in files_ts:
         depth = extract_depth(f)
         try:
             df = pd.read_csv(f)
         except:
             continue
+        df = df.rename(columns=lambda x: x.strip())
         if "Date" not in df.columns:
             continue
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
         df["Depth"] = depth
-        ts_list.append(df[["Date","Depth","t"]])
-    uv_all = pd.concat(uv_list) if uv_list else pd.DataFrame()
-    ts_all = pd.concat(ts_list) if ts_list else pd.DataFrame()
+        ts_list.append(df[["Date","Depth","t","s"]])
+
+    uv_all = pd.concat(uv_list, ignore_index=True) if uv_list else pd.DataFrame()
+    ts_all = pd.concat(ts_list, ignore_index=True) if ts_list else pd.DataFrame()
+
     if uv_all.empty and ts_all.empty:
         return pd.DataFrame()
-    merged = pd.merge(uv_all, ts_all, on=["Date","Depth"], how="outer")
+
+    if uv_all.empty:
+        merged = ts_all.copy()
+        merged["u"] = np.nan
+        merged["v"] = np.nan
+    elif ts_all.empty:
+        merged = uv_all.copy()
+        merged["t"] = np.nan
+        merged["s"] = np.nan
+    else:
+        merged = pd.merge(uv_all, ts_all, on=["Date","Depth"], how="outer")
+
     merged["Date_JST"] = merged["Date"] + pd.Timedelta(hours=9)
+    merged = merged.sort_values(["Date_JST","Depth"]).reset_index(drop=True)
     merged["Speed"] = np.sqrt(merged["u"].fillna(0)**2 + merged["v"].fillna(0)**2)
     merged["Direction_deg"] = (np.degrees(np.arctan2(merged["u"].fillna(0), merged["v"].fillna(0))) + 360) % 360
     return merged
