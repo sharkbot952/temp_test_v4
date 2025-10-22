@@ -13,7 +13,7 @@ def load_uv_ts(folder):
     files_ts = glob.glob(os.path.join(folder, "t_s_*.csv"))
 
     def extract_depth(fname):
-        m = re.search(r"Lvf([0-9.]+)", os.path.basename(fname))
+        m = re.search(r"Lv([0-9.]+)", os.path.basename(fname))
         return float(m.group(1)) if m else None
 
     uv_list, ts_list = [], []
