@@ -72,9 +72,9 @@ def load_uv_ts(folder):
 # SVG矢印生成関数（ヘッド大きめ・縁取りなし・シャフト太め）
 # =========================================
 # ここでヘッド（矢じり）の大きさを比率で調整できます
-HEAD_LENGTH_RATIO = 0.45        # ヘッドの長さ（tipまで）の比率（0.40〜0.50あたりがバランス良）
-HEAD_HALF_HEIGHT_RATIO = 0.30   # ヘッドの高さ（半分）の比率（0.25〜0.35あたりが見やすい）
-SHAFT_WIDTH_PX = 4.0            # シャフトの線幅（px）
+HEAD_LENGTH_RATIO = 0.50        # ヘッドの長さ（tipまで）の比率（0.40〜0.50あたりがバランス良）
+HEAD_HALF_HEIGHT_RATIO = 0.35   # ヘッドの高さ（半分）の比率（0.25〜0.35あたりが見やすい）
+SHAFT_WIDTH_PX = 3.5            # シャフトの線幅（px）
 
 def get_arrow_style(speed_mps):
     """
@@ -90,7 +90,7 @@ def get_arrow_style(speed_mps):
     speed_kt = speed_mps * 1.94384
     if speed_kt < 1.0:
         return 18, "#0000FF"   # 青
-    elif speed_kt <= 2.0:
+    elif speed_kt < 2.0:
         return 22, "#FFC107"   # 黄（視認性高め）
     else:
         return 26, "#FF0000"   # 赤
