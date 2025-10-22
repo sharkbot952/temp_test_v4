@@ -69,9 +69,12 @@ def load_uv_ts(folder):
     return merged
 
 # =========================================
-# SVG矢印生成関数（線幅を太く & 縁取り追加）
+# SVG矢印生成関数（ヘッド大きめ・縁取りなし・シャフト太め）
 # =========================================
-arrow_half_height = 6  # 矢じりの半高さ
+# ここでヘッド（矢じり）の大きさを比率で調整できます
+HEAD_LENGTH_RATIO = 0.45        # ヘッドの長さ（tipまで）の比率（0.40〜0.50あたりがバランス良）
+HEAD_HALF_HEIGHT_RATIO = 0.30   # ヘッドの高さ（半分）の比率（0.25〜0.35あたりが見やすい）
+SHAFT_WIDTH_PX = 4.0            # シャフトの線幅（px）
 
 def get_arrow_style(speed_mps):
     """
@@ -83,31 +86,35 @@ def get_arrow_style(speed_mps):
     矢印サイズ：18 / 22 / 26（任意）
     """
     if np.isnan(speed_mps):
-        # 欠損時はグレーにしておく方が「不明」を表現しやすい（青にしたい場合は 'blue' に変更）
-        return 18, "#CCCCCC"
-
+        return 18, "#CCCCCC"   # 欠損時はグレー
     speed_kt = speed_mps * 1.94384
     if speed_kt < 1.0:
         return 18, "#0000FF"   # 青
-    elif speed_kt <= 1.5:
-        return 22, "#FFC107"   # 視認性の良い濃い黄色（元 #FFD700）
+    elif speed_kt <= 2.0:
+        return 22, "#FFC107"   # 黄（視認性高め）
     else:
         return 26, "#FF0000"   # 赤
-
 
 def get_arrow_svg(direction_deg, speed_mps):
     if np.isnan(speed_mps) or np.isnan(direction_deg):
         return ""
     css_angle = (direction_deg - 90) % 360
     size, color = get_arrow_style(speed_mps)
-    line_end = size * 0.55
 
-    # シャフトのみ太く（例: 4px）、ヘッドは縁取りなし
+    # ヘッドサイズを size に対する比率で決定
+    head_length = size * HEAD_LENGTH_RATIO           # ヘッドの水平長さ
+    head_half_h = size * HEAD_HALF_HEIGHT_RATIO      # ヘッドの縦半分の高さ
+
+    # シャフトの終点（ヘッドの開始位置）
+    line_end = size - head_length
+
     return f"""
     <svg width="{size}" height="{size}" style="transform: rotate({css_angle}deg);">
+        <!-- シャフト（後ろの線）：太め・端は丸 -->
         <line x1="4" y1="{size/2}" x2="{line_end}" y2="{size/2}"
-              stroke="{color}" stroke-width="4" stroke-linecap="round"/>
-        <polygon points="{line_end},{size/2 - arrow_half_height} {size},{size/2} {line_end},{size/2 + arrow_half_height}"
+              stroke="{color}" stroke-width="{SHAFT_WIDTH_PX}" stroke-linecap="round"/>
+        <!-- ヘッド（三角）：縁取りなし -->
+        <polygon points="{line_end},{size/2 - head_half_h} {size},{size/2} {line_end},{size/2 + head_half_h}"
                  fill="{color}"/>
     </svg>
     """
@@ -192,7 +199,6 @@ else:
             end_date = start_date + pd.Timedelta(days=6)
             df_period = merged_now[(merged_now["Date_day"] >= start_date) & (merged_now["Date_day"] <= end_date)]
             times = [f"{d.strftime('%m/%d')} 12:00" for d in pd.date_range(start_date, end_date)]
-            # 週モードの日時抽出は固定（毎日12:00）
             day_list = list(pd.date_range(start_date, end_date))
         else:
             df_period = merged_now[merged_now["Date_day"] == selected_date]
@@ -258,6 +264,4 @@ else:
             table_html += "</tr>"
 
         table_html += "</table></div>"
-
-
         st.markdown(table_html, unsafe_allow_html=True)
