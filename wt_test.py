@@ -15,7 +15,7 @@ def load_uv_ts(folder):
     def extract_depth(fname):
         # Lv10.00 に対応
         m = re.search(r"Lv([0-9.]+)", os.path.basename(fname))
-        return float(m.group(1)) if m else None
+        return float(m.group(1)) if m else np.nan
 
     uv_list, ts_list = [], []
     for f in files_uv:
