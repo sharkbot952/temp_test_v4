@@ -63,18 +63,33 @@ def load_uv_ts(folder):
     merged["Date_JST"] = merged["Date"] + pd.Timedelta(hours=9)
     merged = merged.sort_values(["Date_JST", "Depth"]).reset_index(drop=True)
 
-    # 流速・流向
-    merged["Speed"] = np.sqrt(merged["u"].fillna(0) ** 2 + merged["v"].fillna(0) ** 2)  # m/s
-    merged["Direction_deg"] = (np.degrees(np.arctan2(merged["u"].fillna(0), merged["v"].fillna(0))) + 360) % 360
+    # ===== 速度・流向の計算（u/v が両方数値のときのみ）=====
+    # 欠損（NaN）の場合は NaN のままにする（fillna(0) は使わない）
+    uv_valid = merged[["u", "v"]].notna().all(axis=1)
+
+    # 速度（m/s）
+    merged["Speed"] = np.where(
+        uv_valid,
+        np.sqrt(merged["u"]**2 + merged["v"]**2),
+        np.nan
+    )
+
+    # 方向（deg）：u=v=0 は方向なし（NaN）
+    merged["Direction_deg"] = np.where(
+        uv_valid & ((merged["u"] != 0) | (merged["v"] != 0)),
+        (np.degrees(np.arctan2(merged["u"], merged["v"])) + 360) % 360,
+        np.nan
+    )
+
     return merged
 
 # =========================================
-# SVG矢印生成関数（ヘッド大きめ・縁取りなし・シャフト太め）
+# SVG矢印生成関数（ヘッド大きめ・縁取りなし・シャフト太め・短め）
 # =========================================
-# ここでヘッド（矢じり）の大きさを比率で調整できます
-HEAD_LENGTH_RATIO = 0.50        # ヘッドの長さ（tipまで）の比率（0.40〜0.50あたりがバランス良）
-HEAD_HALF_HEIGHT_RATIO = 0.35   # ヘッドの高さ（半分）の比率（0.25〜0.35あたりが見やすい）
-SHAFT_WIDTH_PX = 3.5            # シャフトの線幅（px）
+# 調整パラメータ（必要に応じて変更してください）
+HEAD_LENGTH_RATIO = 0.55        # ヘッドの長さ（tipまで）の比率（0.50〜0.60で調整）
+HEAD_HALF_HEIGHT_RATIO = 0.35   # ヘッド高さ（半分）の比率（0.30〜0.38で調整）
+SHAFT_WIDTH_PX = 4.0            # シャフトの線幅（px）
 
 def get_arrow_style(speed_mps):
     """
@@ -83,19 +98,20 @@ def get_arrow_style(speed_mps):
       - 1.0 kt 未満：青
       - 1.0〜2.0 kt：黄色
       - 2.0 kt より大きい：赤
-    矢印サイズ：18 / 22 / 26（任意）
+    矢印サイズ：18 / 22 / 26（速度帯に応じたサイズ）
     """
     if np.isnan(speed_mps):
-        return 18, "#CCCCCC"   # 欠損時はグレー
+        return 18, "#CCCCCC"   # 欠損時はグレー（NaN表示時に使われることは基本的にない）
     speed_kt = speed_mps * 1.94384
     if speed_kt < 1.0:
         return 18, "#0000FF"   # 青
     elif speed_kt < 2.0:
-        return 22, "#FFC107"   # 黄（視認性高め）
+        return 22, "#FFC107"   # 黄（視認性高め。好みで #FFD700 に変更可）
     else:
         return 26, "#FF0000"   # 赤
 
 def get_arrow_svg(direction_deg, speed_mps):
+    # 欠損は描画しない
     if np.isnan(speed_mps) or np.isnan(direction_deg):
         return ""
     css_angle = (direction_deg - 90) % 360
@@ -105,7 +121,7 @@ def get_arrow_svg(direction_deg, speed_mps):
     head_length = size * HEAD_LENGTH_RATIO           # ヘッドの水平長さ
     head_half_h = size * HEAD_HALF_HEIGHT_RATIO      # ヘッドの縦半分の高さ
 
-    # シャフトの終点（ヘッドの開始位置）
+    # シャフトの終点（ヘッドの開始位置）＝短めにする
     line_end = size - head_length
 
     return f"""
@@ -242,20 +258,26 @@ else:
                     ] if not df_prev.empty else pd.DataFrame()
 
                 if not row.empty:
-                    temp = row["t"].values[0]
-                    speed_mps = row["Speed"].values[0]
-                    speed_kt_label = f"{speed_mps * 1.94384:.1f} kt" if not np.isnan(speed_mps) else "-"
-                    direction = row["Direction_deg"].values[0]
-                    arrow_svg = get_arrow_svg(direction, speed_mps)
-                    bg_color = get_color(temp)
+                    # 値の取り出し（欠損に強い）
+                    temp = row["t"].values[0] if "t" in row.columns else np.nan
+                    speed_mps = row["Speed"].values[0] if "Speed" in row.columns else np.nan
+                    direction = row["Direction_deg"].values[0] if "Direction_deg" in row.columns else np.nan
 
-                    cell_content = (
-                        f"<div class='current-data'>{temp:.1f}°C<br>{speed_kt_label}<br>{arrow_svg}</div>"
-                    )
+                    # ラベル：数値なら表示、欠損なら "NaN"
+                    temp_label = f"{temp:.1f}°C" if pd.notna(temp) else "NaN"
+                    speed_kt_label = f"{speed_mps * 1.94384:.1f} kt" if pd.notna(speed_mps) else "NaN"
+
+                    # 矢印は speed と direction が両方非NaNのときのみ
+                    arrow_svg = get_arrow_svg(direction, speed_mps) if (pd.notna(speed_mps) and pd.notna(direction)) else ""
+
+                    bg_color = get_color(temp)
+                    cell_content = f"<div class='current-data'>{temp_label}<br>{speed_kt_label}<br>{arrow_svg}</div>"
+
+                    # 前年温度（あれば）：欠損なら NaN 表示
                     if not prev_row.empty and "t" in prev_row.columns:
                         prev_temp = prev_row.iloc[0]["t"]
-                        if not np.isnan(prev_temp):
-                            cell_content += f"<div class='prev-data'>({prev_temp:.1f}°C)</div>"
+                        prev_label = f"{prev_temp:.1f}°C" if pd.notna(prev_temp) else "NaN"
+                        cell_content += f"<div class='prev-data'>({prev_label})</div>"
 
                     cell = f"<td style='background-color:{bg_color};'>{cell_content}</td>"
                 else:
