@@ -13,6 +13,7 @@ def load_uv_ts(folder):
     files_ts = glob.glob(os.path.join(folder, "t_s_*.csv"))
 
     def extract_depth(fname):
+        # Lv10.00 に対応
         m = re.search(r"Lv([0-9.]+)", os.path.basename(fname))
         return float(m.group(1)) if m else None
 
