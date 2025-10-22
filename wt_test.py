@@ -132,7 +132,7 @@ else:
     subfolders = [f for f in os.listdir(parent_folder) if os.path.isdir(os.path.join(parent_folder, f))]
     selected_subfolder = st.selectbox("フォルダ", options=subfolders)
 
-    mode_view = st.radio("モード", ["週間（12時）", "1時間ピッチ"])
+    mode_view = st.radio("", ["週間（12時）", "1時間ピッチ"])
     show_prev_year = st.checkbox("前年データ")
 
     folder_now = os.path.join(parent_folder, selected_subfolder, "2025_now")
