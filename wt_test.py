@@ -714,6 +714,7 @@ if view_mode == "予測カレンダー":
 # 水温グラフ（コメントなし）
 #  - 補正ON：実測がある水深のみ選択・描画（係数がある水深のみ補正線）
 #  - 補正OFFでも OBS表示ON なら実測点を重ねて表示
+#  - 任意CSVアップロード＆列選択で右軸・透明度0.65で重ね表示
 # -----------------------------
 elif view_mode == "水温グラフ":
     parent_folder_dr = pjoin(base_dir, "pred")
@@ -729,6 +730,27 @@ elif view_mode == "水温グラフ":
     tolerance_min  = st.sidebar.slider("時刻差の許容範囲（分）", 5, 120, 35, step=5)
     period_choice  = st.sidebar.radio("表示期間", ["直近2週間", "任意期間"], index=0)
     show_obs_points = st.sidebar.checkbox("実測（OBS）を重ねて表示", value=True)
+
+    # --- 任意CSVアップロード（複数可） ---
+    uploaded_generic = st.sidebar.file_uploader(
+        "任意CSVを追加（複数可）", type=["csv"], accept_multiple_files=True
+    )
+
+    # --- DataFrame化関数（251111.pyから流用） ---
+    def normalize_generic_uploaded_csv(file):
+        df = pd.read_csv(file, encoding="utf-8")
+        df.columns = [c.strip() for c in df.columns]
+        df["datetime"] = pd.to_datetime(df.get("Date"), errors="coerce")
+        if "Depth" in df.columns:
+            df["depth_m"] = pd.to_numeric(df.get("Depth"), errors="coerce").round(0).astype("Int64")
+        else:
+            df["depth_m"] = 0
+        df = df.dropna(subset=["datetime"]).copy()
+        for c in df.columns:
+            if c not in ["Date", "datetime", "Depth", "depth_m"]:
+                df[c] = pd.to_numeric(df[c], errors="coerce")
+        df["source"] = getattr(file, "name", "uploaded_generic")
+        return df
 
     # DRロード
     df_dr = load_dr_single_file(base_dir, selected_file)
@@ -837,8 +859,8 @@ elif view_mode == "水温グラフ":
             st.warning("回帰係数の算出に失敗（一致ペア不足など）。未補正で表示します。")
             use_correction = False
 
-    # === グラフ描画（コメントなし） ===
-    fig = make_subplots(specs=[[{"secondary_y": False}]])
+    # === グラフ描画（コメントなし＋任意CSV重ね表示） ===
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
     base_colors    = px.colors.qualitative.Dark24
     obs_colors     = px.colors.qualitative.Safe
     marker_symbols = ["circle","square","diamond","triangle-up","triangle-down","x","cross","star","hexagon"]
@@ -847,6 +869,7 @@ elif view_mode == "水温グラフ":
     symbol_map     = {int(d): marker_symbols[i % len(marker_symbols)] for i, d in enumerate(selected_depths)}
     TEMP_MIN, TEMP_MAX = -2.0, 40.0
 
+    # 予測・補正・実測のグラフ
     if not df_period.empty and selected_depths:
         for d in selected_depths:
             g = df_period[df_period["depth_m"] == d]
@@ -869,7 +892,6 @@ elif view_mode == "水温グラフ":
                         hovertemplate="%{x}<br>水深: " + f"{d}m" + "<br>水温: %{y:.2f} °C"
                     ))
                 else:
-                    # 係数が無い水深は（補正ONでも）描画しない
                     continue
             else:
                 fig.add_trace(go.Scatter(
@@ -893,15 +915,35 @@ elif view_mode == "水温グラフ":
                 hovertemplate="%{x}<br>水深: " + f"{d}m" + "<br>実測水温: %{y:.2f} °C<extra></extra>"
             ))
 
+    # --- 任意CSVの重ね表示（右軸・透明度0.65） ---
+    if uploaded_generic:
+        colors = px.colors.qualitative.Dark24
+        color_idx = 0
+        for f in uploaded_generic:
+            df_gen = normalize_generic_uploaded_csv(f)
+            value_cols = [c for c in df_gen.columns if c not in ["Date", "datetime", "Depth", "depth_m", "source"]]
+            if not value_cols:
+                continue
+            cols = st.multiselect(f"{f.name}の列選択", value_cols, default=value_cols[:1], key=f.name)
+            for col in cols:
+                fig.add_trace(go.Scatter(
+                    x=df_gen["datetime"], y=df_gen[col],
+                    mode="lines", name=f"{f.name} {col}",
+                    opacity=0.65, yaxis="y2", line=dict(color=colors[color_idx % len(colors)], width=2)
+                ))
+                color_idx += 1
+
     show_legend = st.checkbox("凡例を表示", value=True)
     legend_cfg = dict(orientation="h", yanchor="top", y=0.95, xanchor="right", x=1, font=dict(size=12), itemsizing="constant")
     fig.update_layout(
         title={"text": f"{selected_file} 水温{title_suffix}", "y": 0.92, "x": 0.01, "xanchor": "left", "font": {"size": 16}, "pad": {"t": 18}},
         xaxis_title="日時（JST）", yaxis_title="水温 (℃)",
+        yaxis2=dict(overlaying='y', side='right', title='任意列'),
         margin=dict(l=10, r=10, t=60, b=10), height=600, template="plotly_white",
         showlegend=bool(show_legend), legend=legend_cfg if show_legend else dict()
     )
     fig.update_xaxes(tickfont=dict(size=11)); fig.update_yaxes(tickfont=dict(size=11))
+
 
     # 描画（以前抜けていた呼び出しを必ず行う）
     #is_mobile_view = st.checkbox("モバイル簡易表示", value=True)
