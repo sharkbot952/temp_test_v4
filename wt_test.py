@@ -28,6 +28,9 @@ CORR_MATCH_TOL_MIN = 60  # 補正近傍マージ許容（分）
 TEMP_MIN, TEMP_MAX = -2.0, 40.0
 PHYS_MIN, PHYS_MAX = -1.5, 35.0
 HIGH_TEMP_TH = 22.0  # コメント用
+RANGE_STABLE = 0.6
+DELTA_THRESH = 0.3
+
 
 def pjoin(*parts: str) -> str:
     return os.path.normpath(os.path.join(*parts))
@@ -42,6 +45,23 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from typing import Optional, Tuple, List
+
+
+def _pick_series_corr_then_pred(g: pd.DataFrame) -> Optional[pd.Series]:
+    """
+    corr が列として存在し、かつ有効値が1つ以上あれば corr を採用。
+    そうでなければ pred。どちらもダメなら None。
+    """
+    cand = None
+    if "corr_temp" in g.columns:
+        c = pd.to_numeric(g["corr_temp"], errors="coerce")
+        if c.notna().sum() >= 1:
+            cand = c
+    if cand is None and "pred_temp" in g.columns:
+        p = pd.to_numeric(g["pred_temp"], errors="coerce")
+        if p.notna().sum() >= 1:
+            cand = p
+    return cand
 
 def utc_to_jst_naive(s: pd.Series) -> pd.Series:
     """UTCとして解釈 → JSTへ変換 → タイムゾーン情報を外す（naive）"""
@@ -591,6 +611,7 @@ def make_layer_groups(depths: List[int]) -> Dict[str, List[int]]:
             mid = mid[c-1:c+1]
     return {"表層": top, "中層": mid, "底層": bot}
 
+
 def summarize_weekly_for_depth(layer_name: str, target_depth: int, df_period: pd.DataFrame) -> Optional[str]:
     """
     指定した 'target_depth' 1本だけで週間コメントを作る。
@@ -603,28 +624,50 @@ def summarize_weekly_for_depth(layer_name: str, target_depth: int, df_period: pd
     if g.empty:
         return None
 
-    # corr 優先、無ければ pred
-    series = g["corr_temp"] if "corr_temp" in g.columns else g["pred_temp"]
+    # ✅ corr優先（有効値が無ければpredへフォールバック）
+    series = _pick_series_corr_then_pred(g)
+    if series is None:
+        return None
+
     temps = pd.to_numeric(series, errors="coerce")
     temps = temps[(temps > PHYS_MIN) & (temps < PHYS_MAX)].dropna()
     if temps.empty:
         return None
 
+    # 高水温（22℃単独：既存ポリシーに合わせて最小変更）
     t_min, t_max = float(temps.min()), float(temps.max())
-
-    # 「高水温注意」→「高水温」（赤字）
-    # ※太字も入れるなら **:red[...]** にする
     if t_max >= HIGH_TEMP_TH:
         tag = f":red[高水温]（{t_min:.1f}℃～{t_max:.1f}℃）"
+        return f"**{layer_name}**： {int(target_depth)}m{tag}"
+
+    # ✅ まずレンジで「安定」を早決
+    weekly_range = t_max - t_min
+    if weekly_range < RANGE_STABLE:
+        # 既存の“安定（xx.x℃）”の表現を維持（代表値は中央値に変更可だが最小差分で開始値を使用）
+        t_mid = float(temps.iloc[0])  # ここを temps.median() にするとより頑健、ただし今回は最小差分で据え置き可
+        tag = f"安定（{t_mid:.1f}℃）"
+        return f"**{layer_name}**： {int(target_depth)}m{tag}"
+
+    # ✅ 前半/後半の平均差で方向判定（Day1–3 vs Day5–7、Day4は緩衝）
+    idx_first = [i for i in [0,1,2] if i < len(temps)]
+    idx_last  = [i for i in [4,5,6] if i < len(temps)]
+    first3 = temps.iloc[idx_first] if idx_first else temps.iloc[:max(1, len(temps)//2)]
+    last3  = temps.iloc[idx_last]  if idx_last  else temps.iloc[max(1, len(temps)//2):]
+
+    delta = float(last3.mean() - first3.mean())
+
+    # 基本判定
+    if delta > +DELTA_THRESH:
+        tag = f"上昇（{float(temps.iloc[0]):.1f}℃→{float(temps.iloc[-1]):.1f}℃）"
+    elif delta < -DELTA_THRESH:
+        tag = f"下降（{float(temps.iloc[0]):.1f}℃→{float(temps.iloc[-1]):.1f}℃）"
     else:
-        t_start = float(temps.iloc[0]); t_end = float(temps.iloc[-1])
-        delta = t_end - t_start
-        if delta > 0.4:
-            tag = f"上昇（{t_start:.1f}℃→{t_end:.1f}℃）"
-        elif delta < -0.4:
-            tag = f"下降（{t_start:.1f}℃→{t_end:.1f}℃）"
+        # タイブレーク：端点差を最小限で利用
+        end_diff = float(temps.iloc[-1] - temps.iloc[0])
+        if abs(end_diff) >= DELTA_THRESH:
+            tag = f"{'上昇' if end_diff > 0 else '下降'}（{float(temps.iloc[0]):.1f}℃→{float(temps.iloc[-1]):.1f}℃）"
         else:
-            tag = f"安定（{t_start:.1f}℃）"
+            tag = f"安定（{float(temps.iloc[0]):.1f}℃）"
 
     return f"**{layer_name}**： {int(target_depth)}m{tag}"
 
@@ -656,6 +699,7 @@ def pick_shallow_mid_deep_min10_from_depths(depths: List[int]) -> List[int]:
     chosen = [xs[low_idx], xs[mid_idx], xs[high_idx]]
     return sorted(set(chosen))
 
+
 def summarize_weekly_layer_temp(layer_name: str, layer_depths: List[int], df_period: pd.DataFrame) -> Optional[str]:
 
     if not layer_depths or df_period.empty or "depth_m" not in df_period.columns:
@@ -679,29 +723,79 @@ def summarize_weekly_layer_temp(layer_name: str, layer_depths: List[int], df_per
     else:
         target_depth = smd[-1]                   # 底層＝深
 
-    # 代表深度の系列（corrがあればcorr_temp、無ければpred_temp）
+    # 代表深度の系列（corr優先：列があり有効値が1つ以上あればcorr、無ければpred）
     g = df_period[df_period["depth_m"] == target_depth].sort_values("datetime")
     if g.empty:
         return None
 
-    series = g["corr_temp"] if "corr_temp" in g.columns else g["pred_temp"]
+    series = None
+    if "corr_temp" in g.columns:
+        c = pd.to_numeric(g["corr_temp"], errors="coerce")
+        if c.notna().sum() >= 1:
+            series = c
+    if series is None and "pred_temp" in g.columns:
+        p = pd.to_numeric(g["pred_temp"], errors="coerce")
+        if p.notna().sum() >= 1:
+            series = p
+    if series is None:
+        return None
+
     temps = pd.to_numeric(series, errors="coerce")
     temps = temps[(temps > PHYS_MIN) & (temps < PHYS_MAX)].dropna()
     if temps.empty:
         return None
 
-    t_min, t_max = float(temps.min()), float(temps.max())
+    # しきい値（グローバル定数があればそれを使い、無ければ既定値でフォールバック）
+    try:
+        rng_th = float(RANGE_STABLE)  # 例：0.6
+    except Exception:
+        rng_th = 0.6
+    try:
+        dlt_th = float(DELTA_THRESH)  # 例：0.3
+    except Exception:
+        dlt_th = 0.3
 
-    # コメント（高水温は赤太字の短縮表記）
+    # 高水温（22℃等の絶対閾値のみ。p80併用は別途配線）
+    t_min, t_max = float(temps.min()), float(temps.max())
     if t_max >= HIGH_TEMP_TH:
         tag = f":red[高水温]（{t_min:.1f}℃～{t_max:.1f}℃）"
+        return f"**{layer_name}**： {target_depth}m{tag}"
+
+    # まず週レンジで「安定」を早決
+    weekly_range = t_max - t_min
+    if weekly_range < rng_th:
+        # 既存表現を踏襲：開始値で表示（中央値にしたい場合は temps.median() に変更可能）
+        t_start = float(temps.iloc[0])
+        tag = f"安定（{t_start:.1f}℃）"
+        return f"**{layer_name}**： {target_depth}m{tag}"
+
+    # 前半/後半の平均差（Day1–3 vs Day5–7、Day4は緩衝。データ不足時は前半/後半でフォールバック）
+    n = len(temps)
+    idx_first = [i for i in [0, 1, 2] if i < n]
+    idx_last  = [i for i in [4, 5, 6] if i < n]
+
+    if idx_first and idx_last:
+        first = temps.iloc[idx_first]
+        last  = temps.iloc[idx_last]
     else:
-        t_start = float(temps.iloc[0]); t_end = float(temps.iloc[-1])
-        delta = t_end - t_start
-        if delta > 0.4:
-            tag = f"上昇（{t_start:.1f}℃→{t_end:.1f}℃）"
-        elif delta < -0.4:
-            tag = f"下降（{t_start:.1f}℃→{t_end:.1f}℃）"
+        k = max(1, n // 2)
+        first = temps.iloc[:k]
+        last  = temps.iloc[k:] if k < n else temps.iloc[-1:]
+
+    delta = float(last.mean() - first.mean())
+
+    t_start = float(temps.iloc[0])
+    t_end   = float(temps.iloc[-1])
+
+    if delta > +dlt_th:
+        tag = f"上昇（{t_start:.1f}℃→{t_end:.1f}℃）"
+    elif delta < -dlt_th:
+        tag = f"下降（{t_start:.1f}℃→{t_end:.1f}℃）"
+    else:
+        # タイブレーク：端点差を最小限で利用
+        end_diff = t_end - t_start
+        if abs(end_diff) >= dlt_th:
+            tag = f"{'上昇' if end_diff > 0 else '下降'}（{t_start:.1f}℃→{t_end:.1f}℃）"
         else:
             tag = f"安定（{t_start:.1f}℃）"
 
@@ -833,15 +927,15 @@ if view_mode == "予測カレンダー":
     # 表示期間（ラベル非表示）
     try:
         cal_choice = st.segmented_control(
-            "", options=["週間表示", "選択日（1時間毎）"], default="週間表示", key="cal_choice"  # ← ラベル非表示
+            "", options=["週間表示（昼頃）", "選択日（1時間毎）"], default="週間表示", key="cal_choice"  # ← ラベル非表示
         )
     except Exception:
         cal_choice = st.radio(
-            "", ["週間表示", "選択日（1時間毎）"],
+            "", ["週間表示（昼頃）", "選択日（1時間毎）"],
             index=0, horizontal=True, key="cal_choice_radio", label_visibility="collapsed"  # ← ラベル非表示
         )
 
-    if cal_choice == "週間表示":
+    if cal_choice == "週間表示（昼頃）":
         selected_day = st.date_input(
             "", value=max_day, min_value=min_day, max_value=max_day, key="week_base_day", label_visibility="collapsed"  # ← ラベル非表示
         )
