@@ -205,11 +205,35 @@ def load_pred(filename: str) -> pd.DataFrame:
     df["date_day"] = df["datetime"].dt.date
     return df
 
+
+# 1) 既存: file_fingerprint は実装済み。これを pred/corr 読み込みにも使う  ← 既にあります
+# def file_fingerprint(path: str) -> str: ...
+
+# 2) pred/corr/obs ローダのシグネチャを「fp」を受ける形に変更し、キーに混ぜる
 @st.cache_data(show_spinner=False)
-def load_corr_for(filename: str) -> pd.DataFrame:
-    """
-    補正（corr）CSV を読み込む。pred と同名の *_corr.csv を探す。
-    """
+def load_pred(filename: str, fp: str | None = None) -> pd.DataFrame:
+    path = pjoin(BASE_DIR, PRED_DIR, filename)
+    if not os.path.exists(path):
+        return pd.DataFrame()
+    try:
+        df = pd.read_csv(path, encoding="utf-8")
+    except Exception:
+        return pd.DataFrame()
+    df.columns = [c.strip() for c in df.columns]
+    df["datetime"] = utc_to_jst_naive(df.get("Date"))
+    df["depth_m"] = pd.to_numeric(df.get("Depth"), errors="coerce").round(0).astype("Int64")
+    df = df.rename(columns={"Temp": "pred_temp"})
+    if ("U" in df.columns) and ("V" in df.columns):
+        df["U"] = pd.to_numeric(df["U"], errors="coerce")
+        df["V"] = pd.to_numeric(df["V"], errors="coerce")
+        df["Speed"] = np.sqrt(np.square(df["U"]) + np.square(df["V"]))
+        df["Direction_deg"] = (np.degrees(np.arctan2(df["U"], df["V"])) + 360.0) % 360.0
+    df = df.dropna(subset=["datetime", "depth_m"]).copy()
+    df["date_day"] = df["datetime"].dt.date
+    return df
+
+@st.cache_data(show_spinner=False)
+def load_corr_for(filename: str, fp: str | None = None) -> pd.DataFrame:
     name, ext = os.path.splitext(filename)
     corr_filename = f"{name}_corr{ext}"
     path = pjoin(BASE_DIR, CORR_DIR, corr_filename)
@@ -219,44 +243,32 @@ def load_corr_for(filename: str) -> pd.DataFrame:
         df = pd.read_csv(path, encoding="utf-8")
     except Exception:
         return pd.DataFrame()
-
-    df.columns  = [c.strip() for c in df.columns]
+    df.columns = [c.strip() for c in df.columns]
     df["datetime"] = jst_to_naive(df.get("Date"))
-    df["depth_m"]  = pd.to_numeric(df.get("Depth"), errors="coerce").round(0).astype("Int64")
+    df["depth_m"] = pd.to_numeric(df.get("Depth"), errors="coerce").round(0).astype("Int64")
 
-    # 列名の推定（柔軟対応）
     corr_col = _detect_column(df, ["corr", "temp"]) or ("CorrTemp" if "CorrTemp" in df.columns else None)
     if corr_col is None:
         corr_col = "Temp" if "Temp" in df.columns else None
     if corr_col is None:
         return pd.DataFrame()
 
-    low_col  = _detect_column(df, ["corr", "low"])  or ("CorrLow"  if "CorrLow"  in df.columns else None)
+    low_col = _detect_column(df, ["corr", "low"]) or ("CorrLow" if "CorrLow" in df.columns else None)
     high_col = _detect_column(df, ["corr", "high"]) or ("CorrHigh" if "CorrHigh" in df.columns else None)
-
     rename_map = {corr_col: "corr_temp"}
-    if low_col:  rename_map[low_col]  = "corr_low"
+    if low_col: rename_map[low_col] = "corr_low"
     if high_col: rename_map[high_col] = "corr_high"
     df = df.rename(columns=rename_map)
 
     keep = ["datetime", "depth_m", "corr_temp"]
-    if "corr_low"  in df.columns: keep.append("corr_low")
+    if "corr_low" in df.columns: keep.append("corr_low")
     if "corr_high" in df.columns: keep.append("corr_high")
-
     df = df[keep].dropna(subset=["datetime", "depth_m", "corr_temp"]).copy()
     df["date_day"] = df["datetime"].dt.date
     return df
 
 @st.cache_data(show_spinner=False)
-def load_obs_for(filename: str, fp: Optional[str] = None) -> pd.DataFrame:
-    """
-    実測（obs）CSV を読み込む。
-    ※ キャッシュの“消し忘れ表示”を防ぐため、呼び出し側で
-       fp = obs_fingerprint(BASE_DIR, OBS_DIR, filename)
-       df_obs = load_obs_for(filename, fp)
-       のように「ファイル指紋」を第2引数として渡してください。
-       （fp は関数内では未使用だが、@st.cache_data のキーに含まれます）
-    """
+def load_obs_for(filename: str, fp: str | None = None) -> pd.DataFrame:
     path = pjoin(BASE_DIR, OBS_DIR, filename)
     if not os.path.exists(path):
         return pd.DataFrame()
@@ -264,14 +276,14 @@ def load_obs_for(filename: str, fp: Optional[str] = None) -> pd.DataFrame:
         df = pd.read_csv(path, encoding="utf-8")
     except Exception:
         return pd.DataFrame()
-
-    df.columns   = [c.strip() for c in df.columns]
+    df.columns = [c.strip() for c in df.columns]
     df["datetime"] = jst_to_naive(df.get("Date"))
-    df["depth_m"]  = pd.to_numeric(df.get("Depth"), errors="coerce").round(0).astype("Int64")
+    df["depth_m"] = pd.to_numeric(df.get("Depth"), errors="coerce").round(0).astype("Int64")
     df = df.rename(columns={"Temp": "obs_temp"})
     df = df.dropna(subset=["datetime", "depth_m"]).copy()
     df["date_day"] = df["datetime"].dt.date
     return df
+
 
 def add_corr(df_pred: pd.DataFrame, df_corr: pd.DataFrame) -> pd.DataFrame:
     """
@@ -789,6 +801,16 @@ if not pred_files:
 selected_file = st.selectbox(
     "", sorted(pred_files), key="sel_pred_file", label_visibility="collapsed"  # ← ラベル非表示
 )
+
+pred_path = pjoin(BASE_DIR, PRED_DIR, selected_file)
+corr_name, ext = os.path.splitext(selected_file)
+corr_path = pjoin(BASE_DIR, CORR_DIR, f"{corr_name}_corr{ext}")
+obs_path  = pjoin(BASE_DIR, OBS_DIR,  selected_file)
+
+fp_pred = file_fingerprint(pred_path)
+fp_corr = file_fingerprint(corr_path)
+fp_obs  = file_fingerprint(obs_path)
+
 
 # =========================================
 # 予測カレンダー
