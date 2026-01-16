@@ -28,9 +28,9 @@ CORR_MATCH_TOL_MIN = 60  # 補正近傍マージ許容（分）
 TEMP_MIN, TEMP_MAX = -2.0, 40.0
 PHYS_MIN, PHYS_MAX = -1.5, 35.0
 HIGH_TEMP_TH = 22.0  # コメント用
-RANGE_STABLE = 0.6
+RANGE_STABLE = 0.5
 DELTA_THRESH = 0.3
-
+DISPLAY_MODE = "arrow"
 
 def pjoin(*parts: str) -> str:
     return os.path.normpath(os.path.join(*parts))
@@ -612,6 +612,7 @@ def make_layer_groups(depths: List[int]) -> Dict[str, List[int]]:
     return {"表層": top, "中層": mid, "底層": bot}
 
 
+
 def summarize_weekly_for_depth(layer_name: str, target_depth: int, df_period: pd.DataFrame) -> Optional[str]:
     """
     指定した 'target_depth' 1本だけで週間コメントを作る。
@@ -629,45 +630,68 @@ def summarize_weekly_for_depth(layer_name: str, target_depth: int, df_period: pd
     if series is None:
         return None
 
-    temps = pd.to_numeric(series, errors="coerce")
-    temps = temps[(temps > PHYS_MIN) & (temps < PHYS_MAX)].dropna()
+    # --- 日別中央値に集約してから判定・表示（週間＝最大7点） ---
+    dfz = g.assign(val=pd.to_numeric(series, errors="coerce"))
+    dfz = dfz[(dfz["val"] > PHYS_MIN) & (dfz["val"] < PHYS_MAX)].dropna(subset=["val"])
+    if dfz.empty:
+        return None
+    if "date_day" not in dfz.columns:
+        dfz["date_day"] = dfz["datetime"].dt.date
+
+    daily = (
+        dfz.groupby("date_day", as_index=False)["val"]
+           .median()
+           .sort_values("date_day")
+    )
+    temps = daily["val"]
     if temps.empty:
         return None
 
-    # 高水温（22℃単独：既存ポリシーに合わせて最小変更）
+    # しきい値
+    rng_th = float(RANGE_STABLE) if "RANGE_STABLE" in globals() else 0.6
+    dlt_th = float(DELTA_THRESH) if "DELTA_THRESH" in globals() else 0.3
+
+    # 高水温（22℃単独。p80併用は後で容易に拡張可）
     t_min, t_max = float(temps.min()), float(temps.max())
     if t_max >= HIGH_TEMP_TH:
         tag = f":red[高水温]（{t_min:.1f}℃～{t_max:.1f}℃）"
         return f"**{layer_name}**： {int(target_depth)}m{tag}"
 
-    # ✅ まずレンジで「安定」を早決
+    # まず週レンジで「安定」を早決
     weekly_range = t_max - t_min
-    if weekly_range < RANGE_STABLE:
-        # 既存の“安定（xx.x℃）”の表現を維持（代表値は中央値に変更可だが最小差分で開始値を使用）
-        t_mid = float(temps.iloc[0])  # ここを temps.median() にするとより頑健、ただし今回は最小差分で据え置き可
-        tag = f"安定（{t_mid:.1f}℃）"
+    if weekly_range < rng_th:
+        # 既存仕様を踏襲（数値は簡潔に開始日の中央値）
+        t_start = float(temps.iloc[0])
+        tag = f"安定（{t_start:.1f}℃）"
         return f"**{layer_name}**： {int(target_depth)}m{tag}"
 
-    # ✅ 前半/後半の平均差で方向判定（Day1–3 vs Day5–7、Day4は緩衝）
-    idx_first = [i for i in [0,1,2] if i < len(temps)]
-    idx_last  = [i for i in [4,5,6] if i < len(temps)]
-    first3 = temps.iloc[idx_first] if idx_first else temps.iloc[:max(1, len(temps)//2)]
-    last3  = temps.iloc[idx_last]  if idx_last  else temps.iloc[max(1, len(temps)//2):]
+    # 前半/後半の平均差（Day1–3 vs Day5–7相当：中央値系列なので素直に分割）
+    n = len(temps)
+    idx_first = [i for i in [0, 1, 2] if i < n]
+    idx_last  = [i for i in [4, 5, 6] if i < n]
+    first = temps.iloc[idx_first] if idx_first else temps.iloc[:max(1, n // 2)]
+    last  = temps.iloc[idx_last]  if idx_last  else temps.iloc[max(1, n // 2):]
+    delta = float(last.mean() - first.mean())
 
-    delta = float(last3.mean() - first3.mean())
+    # 表示ペイロード（arrow / range の切替）
+    first_mean = float(first.mean()); last_mean = float(last.mean())
+    def payload_arrow() -> str: return f"{first_mean:.1f}℃→{last_mean:.1f}℃"
+    def payload_range() -> str: return f"{t_min:.1f}–{t_max:.1f}℃"
+    def payload() -> str: return payload_arrow() if DISPLAY_MODE == "arrow" else payload_range()
 
-    # 基本判定
-    if delta > +DELTA_THRESH:
-        tag = f"上昇（{float(temps.iloc[0]):.1f}℃→{float(temps.iloc[-1]):.1f}℃）"
-    elif delta < -DELTA_THRESH:
-        tag = f"下降（{float(temps.iloc[0]):.1f}℃→{float(temps.iloc[-1]):.1f}℃）"
+    # 方向判定（従来どおり）
+    if delta > +dlt_th:
+        tag = f"上昇（{payload()}）"
+    elif delta < -dlt_th:
+        tag = f"下降（{payload()}）"
     else:
-        # タイブレーク：端点差を最小限で利用
-        end_diff = float(temps.iloc[-1] - temps.iloc[0])
-        if abs(end_diff) >= DELTA_THRESH:
-            tag = f"{'上昇' if end_diff > 0 else '下降'}（{float(temps.iloc[0]):.1f}℃→{float(temps.iloc[-1]):.1f}℃）"
+        # タイブレーク：中央値系列の端点
+        t_start = float(temps.iloc[0]); t_end = float(temps.iloc[-1])
+        end_diff = t_end - t_start
+        if abs(end_diff) >= dlt_th:
+            tag = f"{'上昇' if end_diff > 0 else '下降'}（{payload()}）"
         else:
-            tag = f"安定（{float(temps.iloc[0]):.1f}℃）"
+            tag = f"安定（{payload()}）"
 
     return f"**{layer_name}**： {int(target_depth)}m{tag}"
 
@@ -700,8 +724,8 @@ def pick_shallow_mid_deep_min10_from_depths(depths: List[int]) -> List[int]:
     return sorted(set(chosen))
 
 
-def summarize_weekly_layer_temp(layer_name: str, layer_depths: List[int], df_period: pd.DataFrame) -> Optional[str]:
 
+def summarize_weekly_layer_temp(layer_name: str, layer_depths: List[int], df_period: pd.DataFrame) -> Optional[str]:
     if not layer_depths or df_period.empty or "depth_m" not in df_period.columns:
         return None
 
@@ -717,89 +741,14 @@ def summarize_weekly_layer_temp(layer_name: str, layer_depths: List[int], df_per
 
     # レイヤー名に応じて代表1本だけ選ぶ
     if layer_name == "表層":
-        target_depth = smd[0]                    # 浅（10m以上の最小が優先）
+        target_depth = smd[0]                  # 浅（10m以上の最小が優先）
     elif layer_name == "中層":
-        target_depth = smd[min(1, len(smd)-1)]   # 中（候補が2以下でも破綻しない）
+        target_depth = smd[min(1, len(smd)-1)] # 中（候補が2以下でも破綻しない）
     else:
-        target_depth = smd[-1]                   # 底層＝深
+        target_depth = smd[-1]                 # 底層＝深
 
-    # 代表深度の系列（corr優先：列があり有効値が1つ以上あればcorr、無ければpred）
-    g = df_period[df_period["depth_m"] == target_depth].sort_values("datetime")
-    if g.empty:
-        return None
-
-    series = None
-    if "corr_temp" in g.columns:
-        c = pd.to_numeric(g["corr_temp"], errors="coerce")
-        if c.notna().sum() >= 1:
-            series = c
-    if series is None and "pred_temp" in g.columns:
-        p = pd.to_numeric(g["pred_temp"], errors="coerce")
-        if p.notna().sum() >= 1:
-            series = p
-    if series is None:
-        return None
-
-    temps = pd.to_numeric(series, errors="coerce")
-    temps = temps[(temps > PHYS_MIN) & (temps < PHYS_MAX)].dropna()
-    if temps.empty:
-        return None
-
-    # しきい値（グローバル定数があればそれを使い、無ければ既定値でフォールバック）
-    try:
-        rng_th = float(RANGE_STABLE)  # 例：0.6
-    except Exception:
-        rng_th = 0.6
-    try:
-        dlt_th = float(DELTA_THRESH)  # 例：0.3
-    except Exception:
-        dlt_th = 0.3
-
-    # 高水温（22℃等の絶対閾値のみ。p80併用は別途配線）
-    t_min, t_max = float(temps.min()), float(temps.max())
-    if t_max >= HIGH_TEMP_TH:
-        tag = f":red[高水温]（{t_min:.1f}℃～{t_max:.1f}℃）"
-        return f"**{layer_name}**： {target_depth}m{tag}"
-
-    # まず週レンジで「安定」を早決
-    weekly_range = t_max - t_min
-    if weekly_range < rng_th:
-        # 既存表現を踏襲：開始値で表示（中央値にしたい場合は temps.median() に変更可能）
-        t_start = float(temps.iloc[0])
-        tag = f"安定（{t_start:.1f}℃）"
-        return f"**{layer_name}**： {target_depth}m{tag}"
-
-    # 前半/後半の平均差（Day1–3 vs Day5–7、Day4は緩衝。データ不足時は前半/後半でフォールバック）
-    n = len(temps)
-    idx_first = [i for i in [0, 1, 2] if i < n]
-    idx_last  = [i for i in [4, 5, 6] if i < n]
-
-    if idx_first and idx_last:
-        first = temps.iloc[idx_first]
-        last  = temps.iloc[idx_last]
-    else:
-        k = max(1, n // 2)
-        first = temps.iloc[:k]
-        last  = temps.iloc[k:] if k < n else temps.iloc[-1:]
-
-    delta = float(last.mean() - first.mean())
-
-    t_start = float(temps.iloc[0])
-    t_end   = float(temps.iloc[-1])
-
-    if delta > +dlt_th:
-        tag = f"上昇（{t_start:.1f}℃→{t_end:.1f}℃）"
-    elif delta < -dlt_th:
-        tag = f"下降（{t_start:.1f}℃→{t_end:.1f}℃）"
-    else:
-        # タイブレーク：端点差を最小限で利用
-        end_diff = t_end - t_start
-        if abs(end_diff) >= dlt_th:
-            tag = f"{'上昇' if end_diff > 0 else '下降'}（{t_start:.1f}℃→{t_end:.1f}℃）"
-        else:
-            tag = f"安定（{t_start:.1f}℃）"
-
-    return f"**{layer_name}**： {target_depth}m{tag}"
+    # ✅ 判定・表示は for_depth に一本化（corr優先・日別中央値・arrow/range切替）
+    return summarize_weekly_for_depth(layer_name, target_depth, df_period)
 
 def dir_to_8pt_jp(deg: float) -> str:
     if pd.isna(deg): return ""
