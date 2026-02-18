@@ -22,7 +22,7 @@ from streamlit.components.v1 import html as st_html
 # =========================
 # 基本設定／パス
 # =========================
-st.set_page_config(page_title="wt_test（統合版）", layout="wide")
+#st.set_page_config(page_title="wt_test（統合版）", layout="wide")
 
 ANCHOR_YEAR = 2000
 DEFAULT_BASE_DIR = "data"
