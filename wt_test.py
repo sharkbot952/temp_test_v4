@@ -1673,7 +1673,7 @@ def render_calendar_mode():
 # メイン
 # =========================
 def main():
-    st.title("wt_test（単一ファイル統合版）")
+    st.title("")
 
     try:
         # Streamlit のバージョンにより segmented_control が無いことがあるため try
