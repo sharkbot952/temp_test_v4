@@ -3,7 +3,8 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-from pathlib import Path  # ← 追加（mtime取得に使う）
+from pathlib import Path
+import hashlib
 
 st.set_page_config(layout="wide")
 
@@ -119,11 +120,11 @@ def build_month_dekad_by_year(df, month, years):
     return out
 
 # =====================================================
-# データ読み込み（mtime をキャッシュキーに追加）
+# データ読み込み（sha1キーでキャッシュ破り）
 # =====================================================
 @st.cache_data(show_spinner=False)
-def load_raw(csv_path: str, mtime: float):
-    # mtime は「キャッシュを更新するためのキー」（使わなくてOK）
+def load_raw(csv_path: str, csv_sha1: str):
+    # csv_sha1 はキャッシュキーとして使用（関数内で未使用でOK）
     df = pd.read_csv(csv_path, encoding=ENCODING)
     df[DATE_COL] = pd.to_datetime(df[DATE_COL], errors="coerce")
     df = df.dropna(subset=[DATE_COL]).copy()
@@ -138,10 +139,19 @@ def load_raw(csv_path: str, mtime: float):
     df["Day"] = df[DATE_COL].dt.day
     return df
 
+# --- CSVの存在確認＆sha1計算 ---
 p = Path(CSV_PATH)
-csv_mtime = p.stat().st_mtime if p.exists() else 0.0
-df_raw = load_raw(CSV_PATH, csv_mtime)
+if not p.exists():
+    st.error(f"CSV が見つかりません: {CSV_PATH}")
+    st.stop()
 
+csv_bytes = p.read_bytes()
+csv_sha1 = hashlib.sha1(csv_bytes).hexdigest()
+
+# デバッグしたいときだけ一時的に表示（普段はコメントアウト推奨）
+# st.caption(f"csv sha1: {csv_sha1[:10]}  size: {len(csv_bytes)} bytes")
+
+df_raw = load_raw(CSV_PATH, csv_sha1)
 years = sorted(df_raw["Year"].dropna().unique().tolist())
 CURRENT_YEAR = max(years)
 
@@ -175,6 +185,7 @@ if mode == "要約":
                     unsafe_allow_html=True
                 )
             else:
+                # 平均 or 最大 が 20℃以上なら赤
                 is_hot = (info["mean"] >= 20.0) or (info["max"] >= 20.0)
                 color_main = HOT_RED if is_hot else "#000000"
                 color_range = HOT_RED if is_hot else "#666666"
@@ -195,7 +206,7 @@ if mode == "要約":
                     unsafe_allow_html=True
                 )
 
-    # --- 将来用コメント枠（ここだけ囲う） ---
+    # 将来用コメント枠（ここだけ囲う）
     st.markdown(
         """
         <div style="
