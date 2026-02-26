@@ -123,7 +123,7 @@ def build_month_dekad_by_year(df, month, years):
 # =====================================================
 # データ読み込み（sha1キーでキャッシュ破り）
 # =====================================================
-@st.cache_data(show_spinner=False)
+#@st.cache_data(show_spinner=False)
 def load_raw(csv_path: str, csv_sha1: str):
     # csv_sha1 はキャッシュキーとして使用（関数内で未使用でOK）
     df = pd.read_csv(csv_path, encoding=ENCODING)
