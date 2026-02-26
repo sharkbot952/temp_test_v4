@@ -3,12 +3,13 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
+from pathlib import Path  # ← 追加（mtime取得に使う）
 
 st.set_page_config(layout="wide")
 
 # =====================================================
 # 固定設定
-
+# =====================================================
 CSV_PATH = "data/Taiki_temp.csv"
 ENCODING = "utf-8-sig"
 DATE_COL = "DATE"
@@ -118,11 +119,12 @@ def build_month_dekad_by_year(df, month, years):
     return out
 
 # =====================================================
-# データ読み込み
+# データ読み込み（mtime をキャッシュキーに追加）
 # =====================================================
 @st.cache_data(show_spinner=False)
-def load_raw():
-    df = pd.read_csv(CSV_PATH, encoding=ENCODING)
+def load_raw(csv_path: str, mtime: float):
+    # mtime は「キャッシュを更新するためのキー」（使わなくてOK）
+    df = pd.read_csv(csv_path, encoding=ENCODING)
     df[DATE_COL] = pd.to_datetime(df[DATE_COL], errors="coerce")
     df = df.dropna(subset=[DATE_COL]).copy()
 
@@ -134,10 +136,12 @@ def load_raw():
     df["Year"] = df[DATE_COL].dt.year
     df["Month"] = df[DATE_COL].dt.month
     df["Day"] = df[DATE_COL].dt.day
-
     return df
 
-df_raw = load_raw()
+p = Path(CSV_PATH)
+csv_mtime = p.stat().st_mtime if p.exists() else 0.0
+df_raw = load_raw(CSV_PATH, csv_mtime)
+
 years = sorted(df_raw["Year"].dropna().unique().tolist())
 CURRENT_YEAR = max(years)
 
