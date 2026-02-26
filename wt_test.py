@@ -7,7 +7,8 @@ from pathlib import Path
 import hashlib
 
 st.set_page_config(layout="wide")
-st.caption("BUILD: 2026-02-26 17:00 JST (wt_test.py)")
+# ビルド日時を更新（反映確認用）
+st.caption("BUILD: 2026-02-26 18:35 JST (wt_test.py / Fixed Cache)")
 
 # =====================================================
 # 固定設定
@@ -114,18 +115,17 @@ def build_month_dekad_by_year(df, month, years):
             else:
                 out[dk][y] = {
                     "mean": g[METRIC].mean(),
-                    "median": g[METRIC].median(),  # 内部保持のみ
+                    "median": g[METRIC].median(),
                     "min": g[METRIC].min(),
                     "max": g[METRIC].max(),
                 }
     return out
 
 # =====================================================
-# データ読み込み（sha1キーでキャッシュ破り）
+# データ読み込み（ttl設定で一定時間ごとに強制再読込）
 # =====================================================
-#@st.cache_data(show_spinner=False)
-def load_raw(csv_path: str, csv_sha1: str):
-    # csv_sha1 はキャッシュキーとして使用（関数内で未使用でOK）
+@st.cache_data(show_spinner="データ読み込み中...", ttl=600)
+def load_raw(csv_path: str, _hash_val: str):
     df = pd.read_csv(csv_path, encoding=ENCODING)
     df[DATE_COL] = pd.to_datetime(df[DATE_COL], errors="coerce")
     df = df.dropna(subset=[DATE_COL]).copy()
@@ -140,24 +140,35 @@ def load_raw(csv_path: str, csv_sha1: str):
     df["Day"] = df[DATE_COL].dt.day
     return df
 
-# --- CSVの存在確認＆sha1計算 ---
+# --- 物理ファイルのチェック ---
 p = Path(CSV_PATH)
 if not p.exists():
     st.error(f"CSV が見つかりません: {CSV_PATH}")
     st.stop()
 
+# ハッシュ計算（ファイルサイズも考慮してキャッシュ破りを確実にする）
 csv_bytes = p.read_bytes()
-csv_sha1 = hashlib.sha1(csv_bytes).hexdigest()
+file_hash = f"{hashlib.sha1(csv_bytes).hexdigest()}_{len(csv_bytes)}"
 
-# デバッグしたいときだけ一時的に表示（普段はコメントアウト推奨）
-# st.caption(f"csv sha1: {csv_sha1[:10]}  size: {len(csv_bytes)} bytes")
+df_raw = load_raw(CSV_PATH, file_hash)
 
-df_raw = load_raw(CSV_PATH, csv_sha1)
+# デバッグ表示（サイドバー）
+with st.sidebar:
+    st.divider()
+    st.subheader("📡 Data Sync Status")
+    last_date = df_raw[DATE_COL].max()
+    st.write(f"**最新データの日時:**")
+    st.code(last_date.strftime('%Y-%m-%d %H:%M'))
+    st.write(f"**Hash:** `{file_hash[:12]}`")
+    if st.button("強制キャッシュクリア"):
+        st.cache_data.clear()
+        st.rerun()
+
 years = sorted(df_raw["Year"].dropna().unique().tolist())
 CURRENT_YEAR = max(years)
 
 # =====================================================
-# UI：表示モード（デフォルトは要約）
+# UI：表示モード
 # =====================================================
 mode = st.radio("", ["要約", "グラフ"], horizontal=True, index=0)
 
@@ -175,7 +186,7 @@ if mode == "要約":
 
     for dk in ["上旬", "中旬", "下旬"]:
         st.markdown(
-            f"<div style='font-weight:600; margin-top:6px;'>{dk}</div>",
+            f"<div style='font-weight:600; margin-top:12px; border-bottom:1px solid #eee;'>{dk}</div>",
             unsafe_allow_html=True
         )
 
@@ -186,15 +197,14 @@ if mode == "要約":
                     unsafe_allow_html=True
                 )
             else:
-                # 平均 or 最大 が 20℃以上なら赤
                 is_hot = (info["mean"] >= 20.0) or (info["max"] >= 20.0)
                 color_main = HOT_RED if is_hot else "#000000"
                 color_range = HOT_RED if is_hot else "#666666"
-                style = "font-weight:600;" if y == CURRENT_YEAR else ""
+                style = "font-weight:bold; background-color:#f0f8ff; padding:2px 4px; border-radius:4px;" if y == CURRENT_YEAR else ""
 
                 st.markdown(
                     f"""
-                    <div style="margin-left:1em; {style}">
+                    <div style="margin-left:1em; margin-top:4px; {style}">
                         {y}年：
                         <span style="font-size:1.1em; color:{color_main};">
                             {info['mean']:.1f}℃
@@ -207,16 +217,9 @@ if mode == "要約":
                     unsafe_allow_html=True
                 )
 
-    # 将来用コメント枠（ここだけ囲う）
     st.markdown(
         """
-        <div style="
-            border-left:3px solid #ccc;
-            margin-top:10px;
-            padding-left:8px;
-            color:#666;
-            font-size:0.85em;
-        ">
+        <div style="border-left:3px solid #ccc; margin-top:20px; padding-left:8px; color:#666; font-size:0.85em;">
         ※ 天候・時化・魚の状態メモ（将来追加）
         </div>
         """,
@@ -224,7 +227,7 @@ if mode == "要約":
     )
 
 # =====================================================
-# グラフ表示（従来どおり）
+# グラフ表示
 # =====================================================
 else:
     c1, c2, c3 = st.columns([1.1, 1.1, 3.0])
@@ -274,23 +277,21 @@ else:
         fig = go.Figure()
         for y in selected_years:
             d = ts_stats[ts_stats["Year"] == y]
-            if d.empty:
-                continue
+            if d.empty: continue
             add_band(fig, d["X"], d["min"], d["max"], colors[y])
             ma = rolling_ma(d["mean"], d["X"], agg_mode) if show_ma else None
             add_lines(fig, d["X"], d["mean"], ma, colors[y], str(y), show_ma)
-        fig.update_layout(template="plotly_white", height=520)
+        fig.update_layout(template="plotly_white", height=520, hovermode="x unified")
         st.plotly_chart(fig, use_container_width=True)
 
     with tab_md:
         fig = go.Figure()
         for y in selected_years:
             d = md_stats[md_stats["Year"] == y]
-            if d.empty:
-                continue
+            if d.empty: continue
             add_band(fig, d["AlignX"], d["min"], d["max"], colors[y])
             ma = rolling_ma(d["mean"], d["AlignX"], agg_mode) if show_ma else None
             add_lines(fig, d["AlignX"], d["mean"], ma, colors[y], str(y), show_ma)
-        fig.update_layout(template="plotly_white", height=520)
+        fig.update_layout(template="plotly_white", height=520, hovermode="x unified")
         fig.update_xaxes(tickformat="%m/%d")
         st.plotly_chart(fig, use_container_width=True)
