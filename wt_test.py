@@ -7,6 +7,7 @@ from pathlib import Path
 import hashlib
 
 st.set_page_config(layout="wide")
+st.caption("BUILD: 2026-02-26 17:00 JST (wt_test.py)")
 
 # =====================================================
 # 固定設定
