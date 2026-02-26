@@ -22,6 +22,31 @@ METRIC = "depth_avg"
 
 HOT_RED = "#d32f2f"  # 強めの赤
 
+
+# =====================================================
+# UI（ピル型ボタン）ユーティリティ
+# =====================================================
+def pill_toggle(options, default, key, label=""):
+    """segmented_control（ピル）優先。無ければ radio(horizontal) にフォールバック。"""
+    try:
+        return st.segmented_control(
+            label,
+            options=options,
+            default=default,
+            key=key,
+            label_visibility="collapsed",
+        )
+    except Exception:
+        idx = options.index(default) if default in options else 0
+        return st.radio(
+            label,
+            options,
+            index=idx,
+            horizontal=True,
+            key=key,
+            label_visibility="collapsed",
+        )
+
 # =====================================================
 # 共通ユーティリティ
 # =====================================================
@@ -154,14 +179,27 @@ file_hash = f"{hashlib.sha1(csv_bytes).hexdigest()}_{len(csv_bytes)}"
 
 df_raw = load_raw(p, file_hash)
 
-# デバッグ表示（サイドバー）は無効化
+# デバッグ表示（サイドバー）
+with st.sidebar:
+    st.divider()
+    st.subheader("📡 Data Sync Status")
+ st.write(f'**App dir:** `{APP_DIR}`')
+ st.write(f'**CSV path:** `{p.resolve()}`')
+    last_date = df_raw[DATE_COL].max()
+    st.write(f"**最新データの日時:**")
+    st.code(last_date.strftime('%Y-%m-%d %H:%M'))
+    st.write(f"**Hash:** `{file_hash[:12]}`")
+    if st.button("強制キャッシュクリア"):
+        st.cache_data.clear()
+        st.rerun()
+
 years = sorted(df_raw["Year"].dropna().unique().tolist())
 CURRENT_YEAR = max(years)
 
 # =====================================================
 # UI：表示モード
 # =====================================================
-mode = st.radio("", ["要約", "グラフ"], horizontal=True, index=0)
+mode = pill_toggle(["要約", "グラフ"], default="要約", key="mode")
 
 # =====================================================
 # 要約表示
@@ -224,9 +262,9 @@ else:
     c1, c2, c3 = st.columns([1.1, 1.1, 3.0])
 
     with c1:
-        agg_label = st.radio("集計", ["日時", "日平均"], horizontal=True)
+        agg_label = pill_toggle(["日時", "日平均"], default="日時", key="agg_label", label="集計")
     with c2:
-        smooth_label = st.radio("平滑化", ["なし", "移動平均(7日)"], horizontal=True)
+        smooth_label = pill_toggle(["なし", "移動平均(7日)"], default="なし", key="smooth_label", label="平滑化")
     with c3:
         selected_years = st.multiselect(
             "年",
