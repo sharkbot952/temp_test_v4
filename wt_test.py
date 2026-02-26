@@ -6,14 +6,16 @@ import plotly.express as px
 from pathlib import Path
 import hashlib
 
-st.set_page_config(layout="wide")
-# ビルド日時を更新（反映確認用）
-st.caption("BUILD: 2026-02-26 18:35 JST (wt_test.py / Fixed Cache)")
+st.set_page_config(page_title="試験版",layout="wide")
 
 # =====================================================
 # 固定設定
 # =====================================================
-CSV_PATH = "data/Taiki_temp.csv"
+
+# アプリ直下の data フォルダを基準にする（Streamlit Cloud 対応）
+APP_DIR = Path(__file__).resolve().parent
+DEFAULT_BASE_DIR = APP_DIR / 'data'
+CSV_PATH = DEFAULT_BASE_DIR / 'Taiki_temp.csv'
 ENCODING = "utf-8-sig"
 DATE_COL = "DATE"
 METRIC = "depth_avg"
@@ -125,8 +127,8 @@ def build_month_dekad_by_year(df, month, years):
 # データ読み込み（ttl設定で一定時間ごとに強制再読込）
 # =====================================================
 @st.cache_data(show_spinner="データ読み込み中...", ttl=600)
-def load_raw(csv_path: str, _hash_val: str):
-    df = pd.read_csv(csv_path, encoding=ENCODING)
+def load_raw(csv_path: Path, _hash_val: str):
+    df = pd.read_csv(str(csv_path), encoding=ENCODING)
     df[DATE_COL] = pd.to_datetime(df[DATE_COL], errors="coerce")
     df = df.dropna(subset=[DATE_COL]).copy()
 
@@ -143,19 +145,21 @@ def load_raw(csv_path: str, _hash_val: str):
 # --- 物理ファイルのチェック ---
 p = Path(CSV_PATH)
 if not p.exists():
-    st.error(f"CSV が見つかりません: {CSV_PATH}")
+    st.error(f"CSV が見つかりません: {CSV_PATH}（{p.resolve()}）")
     st.stop()
 
 # ハッシュ計算（ファイルサイズも考慮してキャッシュ破りを確実にする）
 csv_bytes = p.read_bytes()
 file_hash = f"{hashlib.sha1(csv_bytes).hexdigest()}_{len(csv_bytes)}"
 
-df_raw = load_raw(CSV_PATH, file_hash)
+df_raw = load_raw(p, file_hash)
 
 # デバッグ表示（サイドバー）
 with st.sidebar:
     st.divider()
     st.subheader("📡 Data Sync Status")
+ st.write(f'**App dir:** `{APP_DIR}`')
+ st.write(f'**CSV path:** `{p.resolve()}`')
     last_date = df_raw[DATE_COL].max()
     st.write(f"**最新データの日時:**")
     st.code(last_date.strftime('%Y-%m-%d %H:%M'))
