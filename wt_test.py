@@ -8,7 +8,7 @@ st.set_page_config(layout="wide")
 
 # =====================================================
 # 固定設定
-# =====================================================
+
 CSV_PATH = "data/Taiki_temp.csv"
 ENCODING = "utf-8-sig"
 DATE_COL = "DATE"
