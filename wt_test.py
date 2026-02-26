@@ -179,20 +179,7 @@ file_hash = f"{hashlib.sha1(csv_bytes).hexdigest()}_{len(csv_bytes)}"
 
 df_raw = load_raw(p, file_hash)
 
-# デバッグ表示（サイドバー）
-with st.sidebar:
-    st.divider()
-    st.subheader("📡 Data Sync Status")
- st.write(f'**App dir:** `{APP_DIR}`')
- st.write(f'**CSV path:** `{p.resolve()}`')
-    last_date = df_raw[DATE_COL].max()
-    st.write(f"**最新データの日時:**")
-    st.code(last_date.strftime('%Y-%m-%d %H:%M'))
-    st.write(f"**Hash:** `{file_hash[:12]}`")
-    if st.button("強制キャッシュクリア"):
-        st.cache_data.clear()
-        st.rerun()
-
+# デバッグ表示（サイドバー）は削除
 years = sorted(df_raw["Year"].dropna().unique().tolist())
 CURRENT_YEAR = max(years)
 
