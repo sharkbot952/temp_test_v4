@@ -6,19 +6,22 @@ import plotly.express as px
 from pathlib import Path
 import hashlib
 
-st.set_page_config(page_title="試験版", layout="wide")
+st.set_page_config(page_title="試験版",layout="wide")
 
 # =====================================================
 # 固定設定
 # =====================================================
+
+# アプリ直下の data フォルダを基準にする（Streamlit Cloud 対応）
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_BASE_DIR = APP_DIR / 'data'
 CSV_PATH = DEFAULT_BASE_DIR / 'Taiki_temp.csv'
-
 ENCODING = "utf-8-sig"
 DATE_COL = "DATE"
-METRIC = "depth_avg"   # 水温（既存）
-HOT_RED = "#d32f2f"    # 強めの赤
+METRIC = "depth_avg"
+
+HOT_RED = "#d32f2f"  # 強めの赤
+
 
 # =====================================================
 # UI（ピル型ボタン）ユーティリティ
@@ -75,14 +78,12 @@ def rolling_ma(series: pd.Series, x: pd.Series, mode: str):
     else:
         return series.rolling(window=7, min_periods=1).mean().values
 
-# ---- ここだけ拡張（既存呼び出しは無変更で動く）----
-def add_band(fig, x, ymin, ymax, color, alpha=0.30, yaxis="y"):
+def add_band(fig, x, ymin, ymax, color, alpha=0.30):
     fig.add_trace(go.Scatter(
         x=x, y=ymin, mode="lines",
         line=dict(width=0),
         showlegend=False,
-        hoverinfo="skip",
-        yaxis=yaxis
+        hoverinfo="skip"
     ))
     fig.add_trace(go.Scatter(
         x=x, y=ymax, mode="lines",
@@ -90,37 +91,33 @@ def add_band(fig, x, ymin, ymax, color, alpha=0.30, yaxis="y"):
         fill="tonexty",
         fillcolor=rgba_from_color(color, alpha),
         showlegend=False,
-        hoverinfo="skip",
-        yaxis=yaxis
+        hoverinfo="skip"
     ))
 
-def add_lines(fig, x, y_mean, y_ma, color, name, show_ma: bool, yaxis="y"):
+def add_lines(fig, x, y_mean, y_ma, color, name, show_ma: bool):
     if show_ma:
         fig.add_trace(go.Scatter(
             x=x, y=y_mean, mode="lines",
             line=dict(color=rgba_from_color(color, 0.35), width=1.2),
             name=name,
-            showlegend=True,
-            yaxis=yaxis
+            showlegend=True
         ))
         fig.add_trace(go.Scatter(
             x=x, y=y_ma, mode="lines",
             line=dict(color=color, width=2.6, dash="dot"),
             showlegend=False,
-            hoverinfo="skip",
-            yaxis=yaxis
+            hoverinfo="skip"
         ))
     else:
         fig.add_trace(go.Scatter(
             x=x, y=y_mean, mode="lines",
             line=dict(color=color, width=2.0),
             name=name,
-            showlegend=True,
-            yaxis=yaxis
+            showlegend=True
         ))
 
 # =====================================================
-# 要約モード用ユーティリティ（既存）
+# 要約モード用ユーティリティ
 # =====================================================
 def dekad(day: int):
     if day <= 10:
@@ -160,7 +157,6 @@ def load_raw(csv_path: Path, _hash_val: str):
     df[DATE_COL] = pd.to_datetime(df[DATE_COL], errors="coerce")
     df = df.dropna(subset=[DATE_COL]).copy()
 
-    # 水温（既存ロジック）
     df["1m_avg"] = safe_row_mean(df, ["1m(UML)", "1m(Tele)"])
     df["2m_avg"] = safe_row_mean(df, ["2m(UML)", "2m(Tele)"])
     df["3m_avg"] = safe_row_mean(df, ["3m(UML)", "3m(Tele)"])
@@ -177,11 +173,13 @@ if not p.exists():
     st.error(f"CSV が見つかりません: {CSV_PATH}（{p.resolve()}）")
     st.stop()
 
-# ハッシュ計算（キャッシュ破り）
+# ハッシュ計算（ファイルサイズも考慮してキャッシュ破りを確実にする）
 csv_bytes = p.read_bytes()
 file_hash = f"{hashlib.sha1(csv_bytes).hexdigest()}_{len(csv_bytes)}"
+
 df_raw = load_raw(p, file_hash)
 
+# デバッグ表示（サイドバー）は削除
 years = sorted(df_raw["Year"].dropna().unique().tolist())
 CURRENT_YEAR = max(years)
 
@@ -191,7 +189,7 @@ CURRENT_YEAR = max(years)
 mode = pill_toggle(["要約", "グラフ"], default="要約", key="mode")
 
 # =====================================================
-# 要約表示（既存のまま：水温のみ）
+# 要約表示
 # =====================================================
 if mode == "要約":
     selected_month = st.selectbox(
@@ -199,6 +197,7 @@ if mode == "要約":
         options=list(range(1, 13)),
         index=pd.Timestamp.today().month - 1
     )
+
     summary = build_month_dekad_by_year(df_raw, selected_month, years)
 
     for dk in ["上旬", "中旬", "下旬"]:
@@ -206,6 +205,7 @@ if mode == "要約":
             f"<div style='font-weight:600; margin-top:12px; border-bottom:1px solid #eee;'>{dk}</div>",
             unsafe_allow_html=True
         )
+
         for y, info in summary[dk].items():
             if info is None:
                 st.markdown(
@@ -217,16 +217,17 @@ if mode == "要約":
                 color_main = HOT_RED if is_hot else "#000000"
                 color_range = HOT_RED if is_hot else "#666666"
                 style = "font-weight:bold; background-color:#f0f8ff; padding:2px 4px; border-radius:4px;" if y == CURRENT_YEAR else ""
+
                 st.markdown(
                     f"""
                     <div style="margin-left:1em; margin-top:4px; {style}">
-                      {y}年：
-                      <span style="font-size:1.1em; color:{color_main};">
-                        {info['mean']:.1f}℃
-                      </span>
-                      <span style="color:{color_range}; font-size:0.9em;">
-                        （{info['min']:.1f}–{info['max']:.1f}）
-                      </span>
+                        {y}年：
+                        <span style="font-size:1.1em; color:{color_main};">
+                            {info['mean']:.1f}℃
+                        </span>
+                        <span style="color:{color_range}; font-size:0.9em;">
+                            （{info['min']:.1f}–{info['max']:.1f}）
+                        </span>
                     </div>
                     """,
                     unsafe_allow_html=True
@@ -235,28 +236,22 @@ if mode == "要約":
     st.markdown(
         """
         <div style="border-left:3px solid #ccc; margin-top:20px; padding-left:8px; color:#666; font-size:0.85em;">
-          ※ 天候・時化・魚の状態メモ（将来追加）
+        ※ 天候・時化・魚の状態メモ（将来追加）
         </div>
         """,
         unsafe_allow_html=True
     )
 
 # =====================================================
-# グラフ表示（副軸：Sal/DOを追加）
+# グラフ表示
 # =====================================================
 else:
-    # ここだけ列を1つ増やす（既存のc1,c2,c3はそのままの意味で維持）
-    c0, c1, c2, c3 = st.columns([1.0, 1.1, 1.1, 3.0])
-
-    with c0:
-        sec_label = pill_toggle(["なし", "Sal", "DO"], default="なし", key="sec_label", label="副軸")
+    c1, c2, c3 = st.columns([1.1, 1.1, 3.0])
 
     with c1:
         agg_label = pill_toggle(["日時", "日平均"], default="日時", key="agg_label", label="集計")
-
     with c2:
         smooth_label = pill_toggle(["なし", "移動平均(7日)"], default="なし", key="smooth_label", label="平滑化")
-
     with c3:
         selected_years = st.multiselect(
             "年",
@@ -271,25 +266,14 @@ else:
     show_ma = (smooth_label != "なし")
     colors = year_color_map(selected_years)
 
-    # 副軸メトリクス（CSVの列名に合わせる）
-    sec_metric = {"Sal": "Sal(1m)", "DO": "DO(3m)"}.get(sec_label)
-
-    # 列が無い場合は自動で無効化
-    if sec_metric and sec_metric not in df_raw.columns:
-        st.warning(f"副軸の列が見つかりません: {sec_metric}（副軸はOFFにしました）")
-        sec_metric = None
-        sec_label = "なし"
-
-    # ---- 既存関数を「引数付き」に拡張（呼び出し互換は維持）----
-    def build_timeseries_stats(df, metric=METRIC):
-        d = df[["Year", DATE_COL, metric]].dropna().copy()
+    def build_timeseries_stats(df):
+        d = df[["Year", DATE_COL, METRIC]].dropna().copy()
         d["X"] = d[DATE_COL].dt.floor("D") if agg_mode == "daily" else d[DATE_COL]
-        return d.groupby(["Year", "X"])[metric].agg(["mean", "min", "max"]).reset_index()
+        return d.groupby(["Year", "X"])[METRIC].agg(["mean", "min", "max"]).reset_index()
 
-    def build_same_monthday_stats(df, metric=METRIC):
-        d = df[["Year", DATE_COL, "Month", "Day", metric]].dropna().copy()
+    def build_same_monthday_stats(df):
+        d = df[["Year", DATE_COL, "Month", "Day", METRIC]].dropna().copy()
         d = d[~((d["Month"] == 2) & (d["Day"] == 29))]
-
         if agg_mode == "daily":
             d["AlignX"] = pd.to_datetime(dict(year=2001, month=d["Month"], day=d["Day"]))
         else:
@@ -298,101 +282,32 @@ else:
                 year=2001, month=d["Month"], day=d["Day"],
                 hour=t.hour, minute=t.minute, second=t.second
             ))
+        return d.groupby(["Year", "AlignX"])[METRIC].agg(["mean", "min", "max"]).reset_index()
 
-        return d.groupby(["Year", "AlignX"])[metric].agg(["mean", "min", "max"]).reset_index()
-
-    # 水温（既存呼び出しと同じ）
-    ts_stats = build_timeseries_stats(df_raw, METRIC)
-    md_stats = build_same_monthday_stats(df_raw, METRIC)
-
-    # 副軸（Sal/DO）も水温と同じロジックで集計
-    if sec_metric:
-        ts_sec = build_timeseries_stats(df_raw, sec_metric)
-        md_sec = build_same_monthday_stats(df_raw, sec_metric)
-    else:
-        ts_sec = None
-        md_sec = None
+    ts_stats = build_timeseries_stats(df_raw)
+    md_stats = build_same_monthday_stats(df_raw)
 
     tab_ts, tab_md = st.tabs(["時系列", "同月日比較"])
 
-    # =======================
-    # 時系列
-    # =======================
     with tab_ts:
         fig = go.Figure()
-
-        # --- 水温（第一Y軸）既存の描き方 ---
         for y in selected_years:
             d = ts_stats[ts_stats["Year"] == y]
-            if d.empty:
-                continue
-            add_band(fig, d["X"], d["min"], d["max"], colors[y], yaxis="y")
+            if d.empty: continue
+            add_band(fig, d["X"], d["min"], d["max"], colors[y])
             ma = rolling_ma(d["mean"], d["X"], agg_mode) if show_ma else None
-            add_lines(fig, d["X"], d["mean"], ma, colors[y], f"{y} 水温", show_ma, yaxis="y")
-
-        # --- 副軸（第二Y軸）水温と同様に band + line + MA ---
-        if ts_sec is not None:
-            for y in selected_years:
-                d2 = ts_sec[ts_sec["Year"] == y]
-                if d2.empty:
-                    continue
-                add_band(fig, d2["X"], d2["min"], d2["max"], colors[y], alpha=0.18, yaxis="y2")
-                ma2 = rolling_ma(d2["mean"], d2["X"], agg_mode) if show_ma else None
-                add_lines(fig, d2["X"], d2["mean"], ma2, colors[y], f"{y} {sec_label}", show_ma, yaxis="y2")
-
-        # レイアウト（副軸があるときだけyaxis2を有効化）
-        layout = dict(template="plotly_white", height=520, hovermode="x unified")
-        if ts_sec is not None:
-            layout.update(dict(
-                yaxis=dict(title="水温 (℃)"),
-                yaxis2=dict(
-                    title="Sal" if sec_label == "Sal" else "DO",
-                    overlaying="y",
-                    side="right",
-                    showgrid=False
-                )
-            ))
-        fig.update_layout(**layout)
-
+            add_lines(fig, d["X"], d["mean"], ma, colors[y], str(y), show_ma)
+        fig.update_layout(template="plotly_white", height=520, hovermode="x unified")
         st.plotly_chart(fig, use_container_width=True)
 
-    # =======================
-    # 同月日比較
-    # =======================
     with tab_md:
         fig = go.Figure()
-
-        # --- 水温（第一Y軸）既存の描き方 ---
         for y in selected_years:
             d = md_stats[md_stats["Year"] == y]
-            if d.empty:
-                continue
-            add_band(fig, d["AlignX"], d["min"], d["max"], colors[y], yaxis="y")
+            if d.empty: continue
+            add_band(fig, d["AlignX"], d["min"], d["max"], colors[y])
             ma = rolling_ma(d["mean"], d["AlignX"], agg_mode) if show_ma else None
-            add_lines(fig, d["AlignX"], d["mean"], ma, colors[y], f"{y} 水温", show_ma, yaxis="y")
-
-        # --- 副軸（第二Y軸）も同様 ---
-        if md_sec is not None:
-            for y in selected_years:
-                d2 = md_sec[md_sec["Year"] == y]
-                if d2.empty:
-                    continue
-                add_band(fig, d2["AlignX"], d2["min"], d2["max"], colors[y], alpha=0.18, yaxis="y2")
-                ma2 = rolling_ma(d2["mean"], d2["AlignX"], agg_mode) if show_ma else None
-                add_lines(fig, d2["AlignX"], d2["mean"], ma2, colors[y], f"{y} {sec_label}", show_ma, yaxis="y2")
-
-        layout = dict(template="plotly_white", height=520, hovermode="x unified")
-        if md_sec is not None:
-            layout.update(dict(
-                yaxis=dict(title="水温 (℃)"),
-                yaxis2=dict(
-                    title="Sal" if sec_label == "Sal" else "DO",
-                    overlaying="y",
-                    side="right",
-                    showgrid=False
-                )
-            ))
-        fig.update_layout(**layout)
+            add_lines(fig, d["AlignX"], d["mean"], ma, colors[y], str(y), show_ma)
+        fig.update_layout(template="plotly_white", height=520, hovermode="x unified")
         fig.update_xaxes(tickformat="%m/%d")
-
         st.plotly_chart(fig, use_container_width=True)
