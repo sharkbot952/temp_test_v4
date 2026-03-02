@@ -456,7 +456,7 @@ else:
                             x=r2["X"],
                             y=r2[sec_metric],
                             mode="markers",
-                            marker=dict(size=5, color=colors_sec[y], opacity=0.35),
+                            marker=dict(size=3, color=colors_sec[y], opacity=0.35),
                             name=f"{y} {sec_label}（生）",
                             yaxis="y2",
                         )
@@ -537,7 +537,7 @@ else:
                             x=r2["AlignX"],
                             y=r2[sec_metric],
                             mode="markers",
-                            marker=dict(size=2, color=colors_sec[y], opacity=0.35),
+                            marker=dict(size=3, color=colors_sec[y], opacity=0.35),
                             name=f"{y} {sec_label}（生）",
                             yaxis="y2",
                         )
