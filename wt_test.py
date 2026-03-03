@@ -369,78 +369,30 @@ else:
 
         return d.groupby(["Year", "AlignX"])[metric].agg(["mean", "min", "max"]).reset_index()
 
+    # ---- 副軸（Sal/DO）用：近い時間をまとめて帯（min–max）を作る ----
+    # ※ 時刻集計（"日時"）では、同一時刻にデータが1点だと帯が見えにくいため、
+    #    副軸のみ 3時間幅で丸めて min–max（帯）を作ります。必要なら下の値を変更してください。
+    SEC_BIN_HOURS = 3
 
-
-
-        # ---- 副軸（Sal/DO）用：近い時間をまとめて帯（min–max）を作る ----
-
-
-        # ※ 時刻集計（"日時"）では、同一時刻にデータが1点だと帯が見えにくいため、
-
-
-        #    副軸のみ 3時間幅で丸めて min–max（帯）を作ります。必要なら下の値を変更してください。
-
-
-        SEC_BIN_HOURS = 3
-
-
-
-        def build_timeseries_stats_sec(df, metric, bin_hours=SEC_BIN_HOURS):
-
-
-          d = df[["Year", DATE_COL, metric]].dropna().copy()
-
-
-          if agg_mode == "daily":
-
-
+    def build_timeseries_stats_sec(df, metric, bin_hours=SEC_BIN_HOURS):
+        d = df[["Year", DATE_COL, metric]].dropna().copy()
+        if agg_mode == "daily":
             d["X"] = d[DATE_COL].dt.floor("D")
-
-
-          else:
-
-
-            # 近い時間をまとめる（例：3時間ごと）
-
-
+        else:
             d["X"] = d[DATE_COL].dt.floor(f"{bin_hours}H")
+        return d.groupby(["Year", "X"])[metric].agg(["mean", "min", "max"]).reset_index()
 
-
-          return d.groupby(["Year", "X"])[metric].agg(["mean", "min", "max"]).reset_index()
-
-
-
-        def build_same_monthday_stats_sec(df, metric, bin_hours=SEC_BIN_HOURS):
-
-
-          d = df[["Year", DATE_COL, "Month", "Day", metric]].dropna().copy()
-
-
-          d = d[~((d["Month"] == 2) & (d["Day"] == 29))]
-
-
-          if agg_mode == "daily":
-
-
+    def build_same_monthday_stats_sec(df, metric, bin_hours=SEC_BIN_HOURS):
+        d = df[["Year", DATE_COL, "Month", "Day", metric]].dropna().copy()
+        d = d[~((d["Month"] == 2) & (d["Day"] == 29))]
+        if agg_mode == "daily":
             d["AlignX"] = pd.to_datetime(dict(year=2001, month=d["Month"], day=d["Day"]))
-
-
-          else:
-
-
+        else:
             t = d[DATE_COL].dt
-
-
-            # 近い時刻（bin_hours単位）に丸める：minute/secondは0に寄せる
-
-
             h = (t.hour // bin_hours) * bin_hours
-
-
             d["AlignX"] = pd.to_datetime(dict(year=2001, month=d["Month"], day=d["Day"], hour=h, minute=0, second=0))
+        return d.groupby(["Year", "AlignX"])[metric].agg(["mean", "min", "max"]).reset_index()
 
-
-          return d.groupby(["Year", "AlignX"])[metric].agg(["mean", "min", "max"]).reset_index()
     # ---- 副軸：生データ（点用） ----
     def build_raw_timeseries(df, metric):
         d = df[["Year", DATE_COL, metric]].dropna().copy()
@@ -472,10 +424,11 @@ else:
     md_stats = build_same_monthday_stats(df_raw, METRIC)
 
     if sec_metric:
-      ts_sec = build_timeseries_stats_sec(df_raw, sec_metric)  # 近い時間でまとめて帯(min–max)+平均
-      md_sec = build_same_monthday_stats_sec(df_raw, sec_metric)
+        ts_sec = build_timeseries_stats_sec(df_raw, sec_metric)
+        md_sec = build_same_monthday_stats_sec(df_raw, sec_metric)
     else:
-      ts_sec = md_sec = None
+        ts_sec = md_sec = None
+
     tab_ts, tab_md = st.tabs(["時系列", "同月日比較"])
 
     # =====================
@@ -506,31 +459,39 @@ else:
                 ma_dash="dot",  # 水温MAはdot固定
             )
 
-        # --- 副軸（第二Y軸）：Sal/DOも線で表示（帯=min–max、線=平均、MA=破線/点線で区別） ---
+        # --- 副軸（第二Y軸）：移動平均ON時は線のみ（帯/平均は非表示） ---
         if ts_sec is not None:
-          for y in selected_years:
-            d2 = ts_sec[ts_sec["Year"] == y]
-            if d2.empty:
-              continue
-            # 近い時間でまとめた範囲（帯）
-            add_band(fig, d2["X"], d2["min"], d2["max"], colors_sec[y], alpha=0.14, yaxis="y2")
-            # 平均線（破線）＋（任意で）移動平均（dashdot）
-            ma2 = rolling_ma(d2["mean"], d2["X"], agg_mode) if show_ma else None
-            add_lines(
-              fig,
-              d2["X"],
-              d2["mean"],
-              ma2,
-              colors_sec[y],
-              f"{y} {sec_label}",
-              show_ma,
-              yaxis="y2",
-              base_width=1.8,
-              base_dash="dash",
-              ma_width=2.4,
-              ma_dash="dashdot",
-              mean_alpha=0.55,
-            )
+            for y in selected_years:
+                d2 = ts_sec[ts_sec["Year"] == y]
+                if d2.empty:
+                    continue
+                if show_ma:
+                    ma2 = rolling_ma(d2["mean"], d2["X"], agg_mode)
+                    fig.add_trace(
+                        go.Scatter(
+                            x=d2["X"],
+                            y=ma2,
+                            mode="lines",
+                            line=dict(color=colors_sec[y], width=2.4, dash="dash"),
+                            name=f"{y} {sec_label}（移動平均）",
+                            yaxis="y2",
+                        )
+                    )
+                else:
+                    add_band(fig, d2["X"], d2["min"], d2["max"], colors_sec[y], alpha=0.14, yaxis="y2")
+                    add_lines(
+                        fig,
+                        d2["X"],
+                        d2["mean"],
+                        None,
+                        colors_sec[y],
+                        f"{y} {sec_label}",
+                        False,
+                        yaxis="y2",
+                        base_width=1.8,
+                        base_dash="dash",
+                        mean_alpha=0.65,
+                    )
         layout = dict(template="plotly_white", height=520, hovermode="x unified")
         if ts_sec is not None:
             layout.update(
@@ -576,29 +537,39 @@ else:
                 ma_dash="dot",
             )
 
-        # --- 副軸（第二Y軸）：Sal/DOも線で表示（帯=min–max、線=平均、MA=破線/点線で区別） ---
+        # --- 副軸（第二Y軸）：移動平均ON時は線のみ（帯/平均は非表示） ---
         if md_sec is not None:
-          for y in selected_years:
-            d2 = md_sec[md_sec["Year"] == y]
-            if d2.empty:
-              continue
-            add_band(fig, d2["AlignX"], d2["min"], d2["max"], colors_sec[y], alpha=0.14, yaxis="y2")
-            ma2 = rolling_ma(d2["mean"], d2["AlignX"], agg_mode) if show_ma else None
-            add_lines(
-              fig,
-              d2["AlignX"],
-              d2["mean"],
-              ma2,
-              colors_sec[y],
-              f"{y} {sec_label}",
-              show_ma,
-              yaxis="y2",
-              base_width=1.8,
-              base_dash="dash",
-              ma_width=2.4,
-              ma_dash="dashdot",
-              mean_alpha=0.55,
-            )
+            for y in selected_years:
+                d2 = md_sec[md_sec["Year"] == y]
+                if d2.empty:
+                    continue
+                if show_ma:
+                    ma2 = rolling_ma(d2["mean"], d2["AlignX"], agg_mode)
+                    fig.add_trace(
+                        go.Scatter(
+                            x=d2["AlignX"],
+                            y=ma2,
+                            mode="lines",
+                            line=dict(color=colors_sec[y], width=2.4, dash="dash"),
+                            name=f"{y} {sec_label}（移動平均）",
+                            yaxis="y2",
+                        )
+                    )
+                else:
+                    add_band(fig, d2["AlignX"], d2["min"], d2["max"], colors_sec[y], alpha=0.14, yaxis="y2")
+                    add_lines(
+                        fig,
+                        d2["AlignX"],
+                        d2["mean"],
+                        None,
+                        colors_sec[y],
+                        f"{y} {sec_label}",
+                        False,
+                        yaxis="y2",
+                        base_width=1.8,
+                        base_dash="dash",
+                        mean_alpha=0.65,
+                    )
         layout = dict(template="plotly_white", height=520, hovermode="x unified")
         if md_sec is not None:
             layout.update(
