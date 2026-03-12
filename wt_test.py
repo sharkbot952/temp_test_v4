@@ -25,7 +25,7 @@ FN_MY   = DATA_DIR / "wav_20200101_20221031_asahihama_BOXWIDE.nc"
 FN_ANFC = DATA_DIR / "wav_202211_20260321_asahihama_BOXWIDE.nc"
 
 # =====================================================
-# 水温側：固定設定（あなたの現行 wt_test.py を踏襲）[1](https://dogyoren-my.sharepoint.com/personal/m-takahashi_gyoren_or_jp/Documents/Microsoft%20Copilot%20%E3%83%81%E3%83%A3%E3%83%83%E3%83%88%20%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB/wt_test.py)
+# 水温側：固定設定（あなたの現行 wt_test.py を踏襲）
 # =====================================================
 ENCODING = "utf-8-sig"
 DATE_COL = "DATE"
@@ -75,7 +75,7 @@ RECENT_DAYS_PLOT  = 45
 
 
 # =====================================================
-# UI（ピル型ボタン）ユーティリティ [1](https://dogyoren-my.sharepoint.com/personal/m-takahashi_gyoren_or_jp/Documents/Microsoft%20Copilot%20%E3%83%81%E3%83%A3%E3%83%83%E3%83%88%20%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB/wt_test.py)
+# UI（ピル型ボタン）ユーティリティ
 # =====================================================
 def pill_toggle(options, default, key, label=""):
     """segmented_control（ピル）優先。無ければ radio(horizontal) にフォールバック。"""
@@ -100,7 +100,7 @@ def pill_toggle(options, default, key, label=""):
 
 
 # =====================================================
-# 水温：共通ユーティリティ（現行踏襲）[1](https://dogyoren-my.sharepoint.com/personal/m-takahashi_gyoren_or_jp/Documents/Microsoft%20Copilot%20%E3%83%81%E3%83%A3%E3%83%83%E3%83%88%20%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB/wt_test.py)
+# 水温：共通ユーティリティ（現行踏襲）
 # =====================================================
 def safe_row_mean(df, cols):
     cols = [c for c in cols if c in df.columns]
@@ -190,7 +190,7 @@ def add_lines(
 
 
 # =====================================================
-# 水温：要約ユーティリティ（現行踏襲）[1](https://dogyoren-my.sharepoint.com/personal/m-takahashi_gyoren_or_jp/Documents/Microsoft%20Copilot%20%E3%83%81%E3%83%A3%E3%83%83%E3%83%88%20%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB/wt_test.py)
+# 水温：要約ユーティリティ（現行踏襲）
 # =====================================================
 def dekad(day: int):
     if day <= 10:
@@ -222,7 +222,7 @@ def build_month_dekad_by_year(df, month, years):
 
 
 # =====================================================
-# 水温：データ読み込み（現行踏襲）[1](https://dogyoren-my.sharepoint.com/personal/m-takahashi_gyoren_or_jp/Documents/Microsoft%20Copilot%20%E3%83%81%E3%83%A3%E3%83%83%E3%83%88%20%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB/wt_test.py)
+# 水温：データ読み込み（現行踏襲）
 # =====================================================
 @st.cache_data(show_spinner="データ読み込み中...", ttl=600)
 def load_raw(csv_path: Path, _hash_val: str):
@@ -476,7 +476,7 @@ if CSV_PATH.exists():
 # UI：モード
 # =====================================================
 st.title("試験版")
-mode = pill_toggle(["要約", "グラフ", "波浪警報"], default="要約", key="mode")
+mode = pill_toggle(["要約", "グラフ", "うねり"], default="要約", key="mode")
 
 # =====================================================
 # モード：要約（水温）
@@ -539,9 +539,9 @@ if mode == "要約":
     )
 
 # =====================================================
-# モード：波浪警報（コメント中心）
+# モード：警戒（コメント中心）
 # =====================================================
-elif mode == "波浪警報":
+elif mode == "うねり":
     st.subheader("旭浜：うねり影響の注意喚起（コメント中心）")
 
     tab1, tab2 = st.tabs(["ANFC（解析・予測）", "MY（再解析）"])
