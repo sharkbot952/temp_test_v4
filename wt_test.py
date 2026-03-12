@@ -12,16 +12,15 @@ import plotly.express as px
 # =====================================================
 # ページ設定
 # =====================================================
-st.set_page_config(page_title="", layout="wide")
+st.set_page_config(page_title="試験版", layout="wide")
 
 # =====================================================
 # パス（Streamlit Cloud想定：リポジトリ相対のみ）
 # =====================================================
 APP_DIR = Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"
-
 CSV_PATH = DATA_DIR / "Taiki_temp.csv"
-FN_MY   = DATA_DIR / "wav_20200101_20221031_asahihama_BOXWIDE.nc"
+FN_MY = DATA_DIR / "wav_20200101_20221031_asahihama_BOXWIDE.nc"
 FN_ANFC = DATA_DIR / "wav_202211_20260321_asahihama_BOXWIDE.nc"
 
 # =====================================================
@@ -35,27 +34,22 @@ HOT_RED = "#d32f2f"
 # =====================================================
 # 波浪側：固定設定（スコア等はUIで変更させない）
 # =====================================================
-# 決め打ち地点
-POINT_MY   = (42.0, 143.1999969482422)          # (lat, lon)
+POINT_MY = (42.0, 143.1999969482422)  # (lat, lon)
 POINT_ANFC = (42.16666666666666, 143.41666666666663)
-
-# 期間（ファイル全体を使う設計。ここは固定）
-RANGE_MY   = ("2020-01-01", "2022-10-31")
+RANGE_MY = ("2020-01-01", "2022-10-31")
 RANGE_ANFC = ("2022-11-01", "2026-03-21")
 
-# 時間扱い
 USE_JST = True
 DROP_LEAPDAY = True
 
 # 旭浜：方向帯（固定）
-ENTRANCE_AXIS_DEG = 20.0     # 港口軸 NNE-SSW
-OUTER_BW_AXIS_DEG = 45.0     # 沖側長い防波堤 NE-SW
-INNER_BW_AXIS_DEG = 135.0    # 沿岸側上部防波堤 NW-SE
-OFFSHORE_BEARING_DEG = 90.0  # 外洋側（東）
-
+ENTRANCE_AXIS_DEG = 20.0
+OUTER_BW_AXIS_DEG = 45.0
+INNER_BW_AXIS_DEG = 135.0
+OFFSHORE_BEARING_DEG = 90.0
 SIG_ENTRANCE, W_ENTRANCE = 22.0, 1.00
-SIG_OUTER,    W_OUTER    = 30.0, 0.75
-SIG_INNER,    W_INNER    = 35.0, 0.55
+SIG_OUTER, W_OUTER = 30.0, 0.75
+SIG_INNER, W_INNER = 35.0, 0.55
 DIR_MODE = "max"
 ALLOW_180_FLIP = True
 
@@ -65,18 +59,17 @@ SMOOTH_DAYS = 3
 
 # コメント警報（固定）
 ALERT_SCORE = 0.5
-ALERT_DAYS  = 4
-WATCH_DAYS  = 2
-LOOKBACK_DAYS = 60  # 判定に使う直近日数（固定）
+ALERT_DAYS = 4
+WATCH_DAYS = 2
+LOOKBACK_DAYS = 60
 
 # 表示（固定）
-RECENT_DAYS_TABLE = 10
-RECENT_DAYS_PLOT  = 45
-
+RECENT_DAYS_TABLE = 10  # 表は最新10日
 
 # =====================================================
 # UI（ピル型ボタン）ユーティリティ
 # =====================================================
+
 def pill_toggle(options, default, key, label=""):
     """segmented_control（ピル）優先。無ければ radio(horizontal) にフォールバック。"""
     try:
@@ -98,10 +91,10 @@ def pill_toggle(options, default, key, label=""):
             label_visibility="collapsed",
         )
 
+# =====================================================
+# 水温：共通ユーティリティ
+# =====================================================
 
-# =====================================================
-# 水温：共通ユーティリティ（現行踏襲）
-# =====================================================
 def safe_row_mean(df, cols):
     cols = [c for c in cols if c in df.columns]
     if not cols:
@@ -122,24 +115,12 @@ def rgba_from_color(color, alpha):
         return f"rgba({r},{g},{b},{alpha})"
     return f"rgba(0,0,0,{alpha})"
 
-def rolling_ma(series: pd.Series, x: pd.Series, mode: str):
-    if mode == "datetime":
-        s = series.copy()
-        s.index = pd.to_datetime(x)
-        return (
-            s.sort_index()
-             .rolling("7D", min_periods=1)
-             .mean()
-             .reindex(s.index)
-             .values
-        )
-    else:
-        return series.rolling(window=7, min_periods=1).mean().values
-
 def add_band(fig, x, ymin, ymax, color, alpha=0.30, yaxis="y"):
     fig.add_trace(
         go.Scatter(
-            x=x, y=ymin, mode="lines",
+            x=x,
+            y=ymin,
+            mode="lines",
             line=dict(width=0),
             showlegend=False,
             hoverinfo="skip",
@@ -148,7 +129,9 @@ def add_band(fig, x, ymin, ymax, color, alpha=0.30, yaxis="y"):
     )
     fig.add_trace(
         go.Scatter(
-            x=x, y=ymax, mode="lines",
+            x=x,
+            y=ymax,
+            mode="lines",
             line=dict(width=0),
             fill="tonexty",
             fillcolor=rgba_from_color(color, alpha),
@@ -158,40 +141,23 @@ def add_band(fig, x, ymin, ymax, color, alpha=0.30, yaxis="y"):
         )
     )
 
-def add_lines(
-    fig, x, y_mean, y_ma, color, name, show_ma: bool,
-    yaxis="y", base_width=2.0, base_dash=None,
-    ma_width=2.6, ma_dash="dot", mean_alpha=0.35,
-):
-    """平均線＋（任意で）移動平均線。"""
-    if show_ma:
-        fig.add_trace(
-            go.Scatter(
-                x=x, y=y_mean, mode="lines",
-                line=dict(color=rgba_from_color(color, mean_alpha), width=1.2, dash=base_dash),
-                name=name, showlegend=True, yaxis=yaxis,
-            )
+def add_line(fig, x, y, color, name, yaxis="y", width=2.2, dash=None, alpha=1.0):
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=y,
+            mode="lines",
+            line=dict(color=rgba_from_color(color, alpha) if alpha < 1.0 else color, width=width, dash=dash),
+            name=name,
+            showlegend=True,
+            yaxis=yaxis,
         )
-        fig.add_trace(
-            go.Scatter(
-                x=x, y=y_ma, mode="lines",
-                line=dict(color=color, width=ma_width, dash=ma_dash),
-                showlegend=False, hoverinfo="skip", yaxis=yaxis,
-            )
-        )
-    else:
-        fig.add_trace(
-            go.Scatter(
-                x=x, y=y_mean, mode="lines",
-                line=dict(color=color, width=base_width, dash=base_dash),
-                name=name, showlegend=True, yaxis=yaxis,
-            )
-        )
-
+    )
 
 # =====================================================
-# 水温：要約ユーティリティ（現行踏襲）
+# 水温：要約ユーティリティ
 # =====================================================
+
 def dekad(day: int):
     if day <= 10:
         return "上旬"
@@ -220,10 +186,10 @@ def build_month_dekad_by_year(df, month, years):
                 }
     return out
 
+# =====================================================
+# 水温：データ読み込み
+# =====================================================
 
-# =====================================================
-# 水温：データ読み込み（現行踏襲）
-# =====================================================
 @st.cache_data(show_spinner="データ読み込み中...", ttl=600)
 def load_raw(csv_path: Path, _hash_val: str):
     df = pd.read_csv(str(csv_path), encoding=ENCODING)
@@ -240,10 +206,10 @@ def load_raw(csv_path: Path, _hash_val: str):
     df["Day"] = df[DATE_COL].dt.day
     return df
 
+# =====================================================
+# 波浪：共通関数
+# =====================================================
 
-# =====================================================
-# 波浪：共通関数（固定）
-# =====================================================
 def pick_coord(ds, candidates):
     for c in candidates:
         if c in ds.coords or c in ds.dims:
@@ -268,7 +234,6 @@ def qscale01(s, qlow=0.05, qhigh=0.95):
         return (s - mn) / (mx - mn + 1e-12)
     x = (s - lo) / (hi - lo)
     return np.clip(x, 0, 1)
-
 
 def scale01_lohi(s, lo, hi):
     s = s.astype(float)
@@ -305,19 +270,18 @@ def dir_weight_multi(dir_deg_array, targets, mode="max"):
     M = np.vstack(comps)
     if mode == "max":
         return np.max(M, axis=0)
-    elif mode == "sum":
+    if mode == "sum":
         return np.clip(np.sum(M, axis=0), 0, 1)
-    else:
-        raise ValueError("DIR_MODE must be 'max' or 'sum'")
+    raise ValueError("DIR_MODE must be 'max' or 'sum'")
 
 def build_dir_targets():
     entrance_target = choose_normal(ENTRANCE_AXIS_DEG, OFFSHORE_BEARING_DEG)
-    outer_target    = choose_normal(OUTER_BW_AXIS_DEG,   OFFSHORE_BEARING_DEG)
-    inner_target    = choose_normal(INNER_BW_AXIS_DEG,   OFFSHORE_BEARING_DEG)
+    outer_target = choose_normal(OUTER_BW_AXIS_DEG, OFFSHORE_BEARING_DEG)
+    inner_target = choose_normal(INNER_BW_AXIS_DEG, OFFSHORE_BEARING_DEG)
     return [
         (entrance_target, SIG_ENTRANCE, W_ENTRANCE),
-        (outer_target,    SIG_OUTER,    W_OUTER),
-        (inner_target,    SIG_INNER,    W_INNER),
+        (outer_target, SIG_OUTER, W_OUTER),
+        (inner_target, SIG_INNER, W_INNER),
     ]
 
 @st.cache_data(show_spinner=False, ttl=600)
@@ -328,17 +292,15 @@ def load_wave_daily(fn: str, point_latlon, date_range, ref_quantiles=None):
 
     ds = xr.open_dataset(fn)
 
-    # time座標名の揺れ対策
     time_name = pick_coord(ds, ["time", "time_counter", "TIME", "valid_time"])
-    lat_name  = pick_coord(ds, ["lat", "latitude", "LATITUDE", "nav_lat"])
-    lon_name  = pick_coord(ds, ["lon", "longitude", "LONGITUDE", "nav_lon"])
+    lat_name = pick_coord(ds, ["lat", "latitude", "LATITUDE", "nav_lat"])
+    lon_name = pick_coord(ds, ["lon", "longitude", "LONGITUDE", "nav_lon"])
 
-    # JST指定ならUTCへ戻す
     start = pd.Timestamp(start_date)
-    end   = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+    end = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
     if USE_JST:
         start_utc = start - pd.Timedelta(hours=9)
-        end_utc   = end   - pd.Timedelta(hours=9)
+        end_utc = end - pd.Timedelta(hours=9)
     else:
         start_utc, end_utc = start, end
 
@@ -350,7 +312,6 @@ def load_wave_daily(fn: str, point_latlon, date_range, ref_quantiles=None):
     v_d = pick_var(pt, ["VMDR"])
 
     df = pt[[v_h, v_t, v_d]].to_dataframe().reset_index()
-
     tcol = time_name if time_name in df.columns else (
         "time" if "time" in df.columns else [c for c in df.columns if "time" in c.lower()][0]
     )
@@ -364,26 +325,22 @@ def load_wave_daily(fn: str, point_latlon, date_range, ref_quantiles=None):
 
     df = df.replace([np.inf, -np.inf], np.nan)
 
-    daily = pd.DataFrame({
-        "Hmax": df[v_h].resample("D").max(),
-        "Tp_mean": df[v_t].resample("D").mean(),
-        "Dir_mean": df[v_d].resample("D").mean(),
-    }).dropna()
-
-    meta = {
-        "selected_point": (float(pt[lat_name].values), float(pt[lon_name].values)),
-        "vars": (v_h, v_t, v_d),
-    }
+    daily = pd.DataFrame(
+        {
+            "Hmax": df[v_h].resample("D").max(),
+            "Tp_mean": df[v_t].resample("D").mean(),
+            "Dir_mean": df[v_d].resample("D").mean(),
+        }
+    ).dropna()
 
     if daily.empty:
-        return daily, meta
+        return daily, {}
 
     if DROP_LEAPDAY:
         md = daily.index.strftime("%m-%d")
         daily = daily[md != "02-29"].copy()
 
     # --- A案：正規化の基準（分位）を固定できるようにする
-    # ref_quantiles = (H_lo, H_hi, T_lo, T_hi) を渡すと、選択期間に依らず同じ基準で 0–1 化する
     if ref_quantiles is None:
         H_lo, H_hi = calc_lohi(daily["Hmax"], Q_LOW, Q_HIGH)
         T_lo, T_hi = calc_lohi(daily["Tp_mean"], Q_LOW, Q_HIGH)
@@ -409,7 +366,7 @@ def load_wave_daily(fn: str, point_latlon, date_range, ref_quantiles=None):
     else:
         daily["score_map"] = daily["score"]
 
-    return daily, meta
+    return daily, {}
 
 def classify_alerts(daily: pd.DataFrame):
     """score>=0.5 連続4日以上=警報、2-3日=注意報"""
@@ -432,9 +389,8 @@ def classify_alerts(daily: pd.DataFrame):
         return "OK", f"現時点で注意喚起なし（直近最大 score={mx:.2f} / {dt.date()}）", {"max_score": mx}
 
     start = active.index.min()
-    end   = active.index.max()
+    end = active.index.max()
     dur = (end - start).days + 1
-
     peak_idx = active["score"].idxmax()
     peak_score = float(active.loc[peak_idx, "score"])
     hmax = float(active["Hmax"].max())
@@ -453,36 +409,35 @@ def classify_alerts(daily: pd.DataFrame):
     remain = ALERT_DAYS - dur
     tail = f"（あと{remain}日継続で警報）" if status == "WATCH" and remain > 0 else ""
 
-    msg = (f"{head}：score≥{ALERT_SCORE:.2f} が {dur}日連続 "
-           f"({start.date()}–{end.date()})  "
-           f"最大score={peak_score:.2f}, Hmax={hmax:.1f}m, Tp={tpmax:.1f}s {tail}")
+    msg = (
+        f"{head}：score≥{ALERT_SCORE:.2f} が {dur}日連続 "
+        f"({start.date()}–{end.date()}) "
+        f"最大score={peak_score:.2f}, 波高={hmax:.1f}m, 周期={tpmax:.1f}s {tail}"
+    )
     return status, msg, {"duration_days": int(dur), "peak_score": peak_score}
 
-def plot_recent(daily: pd.DataFrame, title: str):
+def plot_wave(daily: pd.DataFrame, title: str):
     d = daily.sort_index().copy()
+
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=d.index, y=d["score"], mode="lines+markers",
-        name="score", line=dict(width=2),
-    ))
-    fig.add_trace(go.Scatter(
-        x=d.index, y=d["Hmax"], mode="lines",
-        name="Hmax (m)", yaxis="y2", line=dict(width=2, dash="dot"),
-    ))
+    fig.add_trace(go.Scatter(x=d.index, y=d["score"], mode="lines+markers", name="スコア", line=dict(width=2)))
+    fig.add_trace(go.Scatter(x=d.index, y=d["Hmax"], mode="lines", name="波高(m)", yaxis="y2",
+                             line=dict(width=2, dash="dot")))
+
     fig.update_layout(
         template="plotly_white",
         height=320,
         hovermode="x unified",
         title=title,
-        yaxis=dict(title="score (0–1)", range=[0, 1]),
-        yaxis2=dict(title="Hmax (m)", overlaying="y", side="right", showgrid=False),
+        yaxis=dict(title="スコア (0–1)", range=[0, 1]),
+        yaxis2=dict(title="波高(m)", overlaying="y", side="right", showgrid=False),
         margin=dict(l=40, r=40, t=40, b=30),
+        legend=dict(orientation="h", yanchor="top", y=-0.22, xanchor="left", x=0),
     )
     return fig
 
-
 # =====================================================
-# 起動：水温CSVの読み込み（存在しなければ水温系は止める）
+# 起動：水温CSVの読み込み
 # =====================================================
 df_raw = None
 years = []
@@ -498,23 +453,18 @@ if CSV_PATH.exists():
 # =====================================================
 # UI：モード
 # =====================================================
-#st.title("試験版")
-mode = pill_toggle(["水温", "うねり", "グラフ"], default="水温", key="mode")
+st.title("試験版")
+mode = pill_toggle(["水温要約", "うねり", "グラフ"], default="水温要約", key="mode")
 
 # =====================================================
-# モード：要約（水温）
+# モード：水温要約
 # =====================================================
-if mode == "水温":
+if mode == "水温要約":
     if df_raw is None:
         st.error(f"CSV が見つかりません: {CSV_PATH}（repoの data/ に置いてください）")
         st.stop()
 
-    selected_month = st.selectbox(
-        "月",
-        options=list(range(1, 13)),
-        index=pd.Timestamp.today().month - 1,
-    )
-
+    selected_month = st.selectbox("月", options=list(range(1, 13)), index=pd.Timestamp.today().month - 1)
     summary = build_month_dekad_by_year(df_raw, selected_month, years)
 
     for dk in ["上旬", "中旬", "下旬"]:
@@ -522,54 +472,44 @@ if mode == "水温":
             f"<div style='font-weight:600; margin-top:12px; border-bottom:1px solid #eee;'>{dk}</div>",
             unsafe_allow_html=True,
         )
+
         for y, info in summary[dk].items():
             if info is None:
-                st.markdown(
-                    f"<div style='margin-left:1em; color:#999;'>{y}年：データなし</div>",
-                    unsafe_allow_html=True,
-                )
-            else:
-                is_hot = (info["mean"] >= 20.0) or (info["max"] >= 20.0)
-                color_main = HOT_RED if is_hot else "#000000"
-                color_range = HOT_RED if is_hot else "#666666"
-                style = (
-                    "font-weight:bold; background-color:#f0f8ff; padding:2px 4px; border-radius:4px;"
-                    if (CURRENT_YEAR is not None and y == CURRENT_YEAR)
-                    else ""
-                )
-                st.markdown(
-                    f"""
-                    <div style="margin-left:1em; margin-top:4px; {style}">
-                      {y}年：
-                      <span style="font-size:1.1em; color:{color_main};">
-                        {info['mean']:.1f}℃
-                      </span>
-                      <span style="color:{color_range}; font-size:0.9em;">
-                        （{info['min']:.1f}–{info['max']:.1f}）
-                      </span>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
+                continue  # データなしは表示しない
+
+            is_hot = (info["mean"] >= 20.0) or (info["max"] >= 20.0)
+            color_main = HOT_RED if is_hot else "#000000"
+            color_range = HOT_RED if is_hot else "#666666"
+            style = (
+                "font-weight:bold; background-color:#f0f8ff; padding:2px 4px; border-radius:4px;"
+                if (CURRENT_YEAR is not None and y == CURRENT_YEAR)
+                else ""
+            )
+
+            st.markdown(
+                f"""
+                <div style="margin-left:1em; margin-top:4px; {style}">
+                  {y}年：
+                  <span style="font-size:1.1em; color:{color_main};">{info['mean']:.1f}℃</span>
+                  <span style="color:{color_range}; font-size:0.9em;">（{info['min']:.1f}–{info['max']:.1f}）</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
     st.markdown(
         """
         <div style="border-left:3px solid #ccc; margin-top:20px; padding-left:8px; color:#666; font-size:0.85em;">
-          ※ 天候・時化・魚の状態メモ（将来追加）
+        ※ 天候・時化・魚の状態メモ（将来追加）
         </div>
         """,
         unsafe_allow_html=True,
     )
 
 # =====================================================
-# モード：警戒（コメント中心）
+# モード：うねり
 # =====================================================
 elif mode == "うねり":
-    
-
-    # -------------------------------------------------
-    # うねり：期間選択（MY / ANFC を自動切替）
-    # -------------------------------------------------
     @st.cache_data(show_spinner=False, ttl=600)
     def get_time_range(fn: str):
         ds = xr.open_dataset(fn)
@@ -582,11 +522,9 @@ elif mode == "うねり":
             tmax = tmax + pd.Timedelta(hours=9)
         return tmin, tmax
 
-    # 利用可能な期間を把握（存在しないファイルはスキップ）
     anfc_range = get_time_range(str(FN_ANFC)) if FN_ANFC.exists() else None
     my_range = get_time_range(str(FN_MY)) if FN_MY.exists() else None
 
-    # デフォルト：終了日はデータ最終日、開始日は終了日-10日
     if anfc_range is not None:
         end_def = anfc_range[1].normalize()
         start_def = (end_def - pd.Timedelta(days=10)).normalize()
@@ -601,10 +539,10 @@ elif mode == "うねり":
         st.error("波浪ファイルが見つかりません（data/ に .nc を置いてください）")
         st.stop()
 
-    colp1, colp2 = st.columns([1, 1])
-    with colp1:
+    cst, ced = st.columns([1, 1])
+    with cst:
         start_date = st.date_input("開始日", value=start_def.date(), key="wav_start")
-    with colp2:
+    with ced:
         end_date = st.date_input("終了日", value=end_def.date(), key="wav_end")
 
     if start_date > end_date:
@@ -614,37 +552,28 @@ elif mode == "うねり":
     start_ts = pd.Timestamp(start_date)
     end_ts = pd.Timestamp(end_date)
 
-    # 境界（被らない前提）
     my_end = pd.Timestamp(RANGE_MY[1])
     anfc_start = pd.Timestamp(RANGE_ANFC[0])
+
     if start_ts <= my_end and end_ts >= anfc_start:
         st.error("選択した期間が MY(～2022-10) と ANFC(2022-11～) をまたいでいます。どちらか片方の期間にしてください。")
         st.stop()
 
-    # どちらのデータセットを使うか
     if end_ts <= my_end:
         use_kind = "MY"
-    elif start_ts >= anfc_start:
-        use_kind = "ANFC"
-    else:
-        use_kind = "ANFC" if anfc_range is not None else "MY"
-
-    if use_kind == "ANFC":
-        if not FN_ANFC.exists():
-            st.error(f"ファイルがありません: {FN_ANFC}（repoの data/ に置いてください）")
-            st.stop()
-        fn = str(FN_ANFC)
-        point = POINT_ANFC
-        avail = anfc_range
-    else:
-        if not FN_MY.exists():
-            st.error(f"ファイルがありません: {FN_MY}（repoの data/ に置いてください）")
-            st.stop()
         fn = str(FN_MY)
         point = POINT_MY
         avail = my_range
+    else:
+        use_kind = "ANFC"
+        fn = str(FN_ANFC)
+        point = POINT_ANFC
+        avail = anfc_range
 
-    # 利用可能範囲にクランプ
+    if not Path(fn).exists():
+        st.error("波浪ファイルがありません（data/ に .nc を置いてください）")
+        st.stop()
+
     if avail is not None:
         s_clamp = max(start_ts, avail[0].normalize())
         e_clamp = min(end_ts, avail[1].normalize())
@@ -652,7 +581,6 @@ elif mode == "うねり":
             st.info(f"期間をデータ範囲に合わせて補正しました：{s_clamp.date()} – {e_clamp.date()}")
         start_ts, end_ts = s_clamp, e_clamp
 
-    # A案：正規化基準（分位）を「データセット全体」で固定
     with st.spinner("波浪を計算中..."):
         if avail is not None:
             ref_s = avail[0].normalize()
@@ -661,18 +589,17 @@ elif mode == "うねり":
             ref_s = pd.Timestamp(RANGE_ANFC[0]) if use_kind == "ANFC" else pd.Timestamp(RANGE_MY[0])
             ref_e = pd.Timestamp(RANGE_ANFC[1]) if use_kind == "ANFC" else pd.Timestamp(RANGE_MY[1])
 
-        daily_ref, _ = load_wave_daily(fn, point, (ref_s.strftime('%Y-%m-%d'), ref_e.strftime('%Y-%m-%d')))
+        daily_ref, _ = load_wave_daily(fn, point, (ref_s.strftime("%Y-%m-%d"), ref_e.strftime("%Y-%m-%d")))
         if daily_ref is None or daily_ref.empty:
             daily = daily_ref
         else:
             H_lo, H_hi = calc_lohi(daily_ref["Hmax"], Q_LOW, Q_HIGH)
             T_lo, T_hi = calc_lohi(daily_ref["Tp_mean"], Q_LOW, Q_HIGH)
             ref_q = (H_lo, H_hi, T_lo, T_hi)
-            daily, _meta = load_wave_daily(
-                fn,
-                point,
-                (start_ts.strftime('%Y-%m-%d'), end_ts.strftime('%Y-%m-%d')),
-                ref_quantiles=ref_q,
+            daily, _ = load_wave_daily(
+                fn, point,
+                (start_ts.strftime("%Y-%m-%d"), end_ts.strftime("%Y-%m-%d")),
+                ref_quantiles=ref_q
             )
 
     status, msg, _ = classify_alerts(daily)
@@ -686,7 +613,7 @@ elif mode == "うねり":
         st.info(msg)
 
     if daily is not None and not daily.empty:
-        st.plotly_chart(plot_recent(daily, f"期間推移（{use_kind}）"), use_container_width=True)
+        st.plotly_chart(plot_wave(daily, f"期間推移（{use_kind}）"), use_container_width=True)
 
         cols = [c for c in ["score", "Hmax", "Tp_mean", "Dir_mean", "H_idx", "T_idx", "D_idx"] if c in daily.columns]
         dshow = daily.sort_index().tail(RECENT_DAYS_TABLE)[cols].copy()
@@ -708,37 +635,32 @@ elif mode == "うねり":
             "text/csv",
         )
 
-
 # =====================================================
-# モード：グラフ（水温：現行踏襲）# =====================================================
+# モード：グラフ（水温）
+# =====================================================
 else:
     if df_raw is None:
         st.error(f"CSV が見つかりません: {CSV_PATH}（repoの data/ に置いてください）")
         st.stop()
 
-    
-    c0, c1, c2, c3 = st.columns([1.0, 1.1, 1.1, 3.0])
+    # 3列：副軸 / 集計 / 年（移動平均の選択は無し）
+    c0, c1, c3 = st.columns([1.0, 1.1, 3.0])
+
     with c0:
         sec_label = pill_toggle(["なし", "Sal", "DO"], default="なし", key="sec_label", label="副軸")
     with c1:
         agg_label = pill_toggle(["日時", "日平均"], default="日時", key="agg_label", label="集計")
-    with c2:
-        smooth_label = pill_toggle(["なし", "移動平均(7日)"], default="なし", key="smooth_label", label="平滑化")
     with c3:
-        selected_years = st.multiselect(
-            "年",
-            years,
-            default=years[-2:] if len(years) >= 2 else years,
-        )
+        selected_years = st.multiselect("年", years, default=years[-2:] if len(years) >= 2 else years)
+
     if not selected_years:
         st.stop()
 
     agg_mode = "datetime" if agg_label == "日時" else "daily"
-    show_ma = (smooth_label != "なし")
 
     colors = year_color_map(selected_years)
-    sec_palette = px.colors.qualitative.Dark24
-    colors_sec = {y: sec_palette[i % len(sec_palette)] for i, y in enumerate(sorted(selected_years))}
+    # 副軸は水温と同系色（破線で区別）
+    colors_sec = {y: colors[y] for y in selected_years}
 
     sec_metric = {"Sal": "Sal(1m)", "DO": "DO(3m)"}.get(sec_label)
     if sec_metric and sec_metric not in df_raw.columns:
@@ -758,9 +680,7 @@ else:
             d["AlignX"] = pd.to_datetime(dict(year=2001, month=d["Month"], day=d["Day"]))
         else:
             t = d[DATE_COL].dt
-            d["AlignX"] = pd.to_datetime(
-                dict(year=2001, month=d["Month"], day=d["Day"], hour=t.hour, minute=t.minute, second=t.second)
-            )
+            d["AlignX"] = pd.to_datetime(dict(year=2001, month=d["Month"], day=d["Day"], hour=t.hour, minute=t.minute, second=t.second))
         return d.groupby(["Year", "AlignX"])[metric].agg(["mean", "min", "max"]).reset_index()
 
     SEC_BIN_HOURS = 3
@@ -795,6 +715,9 @@ else:
 
     tab_ts, tab_md = st.tabs(["時系列", "同月日比較"])
 
+    # 凡例：下側に横並び（スマホ想定）
+    legend_cfg = dict(orientation="h", yanchor="top", y=-0.22, xanchor="left", x=0)
+
     with tab_ts:
         fig = go.Figure()
 
@@ -803,33 +726,28 @@ else:
             if d.empty:
                 continue
             add_band(fig, d["X"], d["min"], d["max"], colors[y], alpha=0.25, yaxis="y")
-            ma = rolling_ma(d["mean"], d["X"], agg_mode) if show_ma else None
-            add_lines(fig, d["X"], d["mean"], ma, colors[y], f"{y} 水温", show_ma, yaxis="y")
+            add_line(fig, d["X"], d["mean"], colors[y], f"{y} 水温", yaxis="y", width=2.4)
 
         if ts_sec is not None:
             for y in selected_years:
                 d2 = ts_sec[ts_sec["Year"] == y]
                 if d2.empty:
                     continue
-                if show_ma:
-                    ma2 = rolling_ma(d2["mean"], d2["X"], agg_mode)
-                    fig.add_trace(go.Scatter(
-                        x=d2["X"], y=ma2, mode="lines",
-                        line=dict(color=colors_sec[y], width=2.4, dash="dash"),
-                        name=f"{y} {sec_label}（移動平均）",
-                        yaxis="y2",
-                    ))
-                else:
-                    add_band(fig, d2["X"], d2["min"], d2["max"], colors_sec[y], alpha=0.14, yaxis="y2")
-                    add_lines(fig, d2["X"], d2["mean"], None, colors_sec[y], f"{y} {sec_label}", False,
-                              yaxis="y2", base_width=1.8, base_dash="dash", mean_alpha=0.65)
+                add_band(fig, d2["X"], d2["min"], d2["max"], colors_sec[y], alpha=0.12, yaxis="y2")
+                add_line(fig, d2["X"], d2["mean"], colors_sec[y], f"{y} {sec_label}",
+                         yaxis="y2", width=2.0, dash="dash", alpha=0.95)
 
-        layout = dict(template="plotly_white", height=520, hovermode="x unified")
+        layout = dict(
+            template="plotly_white",
+            height=520,
+            hovermode="x unified",
+            legend=legend_cfg,
+            margin=dict(l=40, r=30, t=40, b=90),
+        )
         if ts_sec is not None:
             layout.update(dict(
                 yaxis=dict(title="水温 (℃)"),
-                yaxis2=dict(title="Sal" if sec_label == "Sal" else "DO",
-                            overlaying="y", side="right", showgrid=False),
+                yaxis2=dict(title="Sal" if sec_label == "Sal" else "DO", overlaying="y", side="right", showgrid=False),
             ))
         fig.update_layout(**layout)
         st.plotly_chart(fig, use_container_width=True)
@@ -842,33 +760,28 @@ else:
             if d.empty:
                 continue
             add_band(fig, d["AlignX"], d["min"], d["max"], colors[y], alpha=0.25, yaxis="y")
-            ma = rolling_ma(d["mean"], d["AlignX"], agg_mode) if show_ma else None
-            add_lines(fig, d["AlignX"], d["mean"], ma, colors[y], f"{y} 水温", show_ma, yaxis="y")
+            add_line(fig, d["AlignX"], d["mean"], colors[y], f"{y} 水温", yaxis="y", width=2.4)
 
         if md_sec is not None:
             for y in selected_years:
                 d2 = md_sec[md_sec["Year"] == y]
                 if d2.empty:
                     continue
-                if show_ma:
-                    ma2 = rolling_ma(d2["mean"], d2["AlignX"], agg_mode)
-                    fig.add_trace(go.Scatter(
-                        x=d2["AlignX"], y=ma2, mode="lines",
-                        line=dict(color=colors_sec[y], width=2.4, dash="dash"),
-                        name=f"{y} {sec_label}（移動平均）",
-                        yaxis="y2",
-                    ))
-                else:
-                    add_band(fig, d2["AlignX"], d2["min"], d2["max"], colors_sec[y], alpha=0.14, yaxis="y2")
-                    add_lines(fig, d2["AlignX"], d2["mean"], None, colors_sec[y], f"{y} {sec_label}", False,
-                              yaxis="y2", base_width=1.8, base_dash="dash", mean_alpha=0.65)
+                add_band(fig, d2["AlignX"], d2["min"], d2["max"], colors_sec[y], alpha=0.12, yaxis="y2")
+                add_line(fig, d2["AlignX"], d2["mean"], colors_sec[y], f"{y} {sec_label}",
+                         yaxis="y2", width=2.0, dash="dash", alpha=0.95)
 
-        layout = dict(template="plotly_white", height=520, hovermode="x unified")
+        layout = dict(
+            template="plotly_white",
+            height=520,
+            hovermode="x unified",
+            legend=legend_cfg,
+            margin=dict(l=40, r=30, t=40, b=90),
+        )
         if md_sec is not None:
             layout.update(dict(
                 yaxis=dict(title="水温 (℃)"),
-                yaxis2=dict(title="Sal" if sec_label == "Sal" else "DO",
-                            overlaying="y", side="right", showgrid=False),
+                yaxis2=dict(title="Sal" if sec_label == "Sal" else "DO", overlaying="y", side="right", showgrid=False),
             ))
         fig.update_layout(**layout)
         fig.update_xaxes(tickformat="%m/%d")
