@@ -586,15 +586,15 @@ elif mode == "うねり":
     anfc_range = get_time_range(str(FN_ANFC)) if FN_ANFC.exists() else None
     my_range = get_time_range(str(FN_MY)) if FN_MY.exists() else None
 
-    # デフォルト：最新1か月（基本は ANFC の末尾）
+    # デフォルト：終了日はデータ最終日、開始日は終了日-10日
     if anfc_range is not None:
-        end_def = min(pd.Timestamp.today().normalize(), anfc_range[1].normalize())
-        start_def = (end_def - pd.Timedelta(days=30)).normalize()
+        end_def = anfc_range[1].normalize()
+        start_def = (end_def - pd.Timedelta(days=10)).normalize()
         if start_def < anfc_range[0].normalize():
             start_def = anfc_range[0].normalize()
     elif my_range is not None:
-        end_def = min(pd.Timestamp.today().normalize(), my_range[1].normalize())
-        start_def = (end_def - pd.Timedelta(days=30)).normalize()
+        end_def = my_range[1].normalize()
+        start_def = (end_def - pd.Timedelta(days=10)).normalize()
         if start_def < my_range[0].normalize():
             start_def = my_range[0].normalize()
     else:
@@ -686,10 +686,8 @@ elif mode == "うねり":
         st.info(msg)
 
     if daily is not None and not daily.empty:
-        # グラフ：開始日～終了日の範囲をそのまま表示
         st.plotly_chart(plot_recent(daily, f"期間推移（{use_kind}）"), use_container_width=True)
 
-        # 表：最新日から10日分のみ表示
         cols = [c for c in ["score", "Hmax", "Tp_mean", "Dir_mean", "H_idx", "T_idx", "D_idx"] if c in daily.columns]
         dshow = daily.sort_index().tail(RECENT_DAYS_TABLE)[cols].copy()
         rename = {
