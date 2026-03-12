@@ -12,7 +12,7 @@ import plotly.express as px
 # =====================================================
 # ページ設定
 # =====================================================
-st.set_page_config(page_title="試験版", layout="wide")
+st.set_page_config(page_title="", layout="wide")
 
 # =====================================================
 # パス（Streamlit Cloud想定：リポジトリ相対のみ）
@@ -25,7 +25,7 @@ FN_MY   = DATA_DIR / "wav_20200101_20221031_asahihama_BOXWIDE.nc"
 FN_ANFC = DATA_DIR / "wav_202211_20260321_asahihama_BOXWIDE.nc"
 
 # =====================================================
-# 水温側：固定設定（あなたの現行 wt_test.py を踏襲）
+# 水温側：固定設定
 # =====================================================
 ENCODING = "utf-8-sig"
 DATE_COL = "DATE"
@@ -710,14 +710,13 @@ elif mode == "うねり":
 
 
 # =====================================================
-# モード：グラフ（水温：現行踏襲）[1](https://dogyoren-my.sharepoint.com/personal/m-takahashi_gyoren_or_jp/Documents/Microsoft%20Copilot%20%E3%83%81%E3%83%A3%E3%83%83%E3%83%88%20%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB/wt_test.py)
-# =====================================================
+# モード：グラフ（水温：現行踏襲）# =====================================================
 else:
     if df_raw is None:
         st.error(f"CSV が見つかりません: {CSV_PATH}（repoの data/ に置いてください）")
         st.stop()
 
-    # 既存の3列UIを壊さず、副軸だけ1列追加 [1](https://dogyoren-my.sharepoint.com/personal/m-takahashi_gyoren_or_jp/Documents/Microsoft%20Copilot%20%E3%83%81%E3%83%A3%E3%83%83%E3%83%88%20%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB/wt_test.py)
+    
     c0, c1, c2, c3 = st.columns([1.0, 1.1, 1.1, 3.0])
     with c0:
         sec_label = pill_toggle(["なし", "Sal", "DO"], default="なし", key="sec_label", label="副軸")
