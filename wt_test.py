@@ -476,12 +476,12 @@ if CSV_PATH.exists():
 # UI：モード
 # =====================================================
 st.title("試験版")
-mode = pill_toggle(["要約", "グラフ", "うねり"], default="要約", key="mode")
+mode = pill_toggle(["水温要約", "うねり", "グラフ"], default="水温要約", key="mode")
 
 # =====================================================
 # モード：要約（水温）
 # =====================================================
-if mode == "要約":
+if mode == "水温要約":
     if df_raw is None:
         st.error(f"CSV が見つかりません: {CSV_PATH}（repoの data/ に置いてください）")
         st.stop()
@@ -542,61 +542,142 @@ if mode == "要約":
 # モード：警戒（コメント中心）
 # =====================================================
 elif mode == "うねり":
-    st.subheader("旭浜：うねり影響の注意喚起（コメント中心）")
+    
+    
+ # -------------------------------------------------
+ # うねり：期間選択（MY / ANFC を自動切替）
+ # -------------------------------------------------
+ @st.cache_data(show_spinner=False, ttl=600)
+ def get_time_range(fn: str):
+     ds = xr.open_dataset(fn)
+     time_name = pick_coord(ds, ["time", "time_counter", "TIME", "valid_time"])
+     t = pd.to_datetime(ds[time_name].values)
+     tmin = pd.Timestamp(t.min())
+     tmax = pd.Timestamp(t.max())
+     if USE_JST:
+         tmin = tmin + pd.Timedelta(hours=9)
+         tmax = tmax + pd.Timedelta(hours=9)
+     return tmin, tmax
 
-    tab1, tab2 = st.tabs(["ANFC（解析・予測）", "MY（再解析）"])
+ # まずは利用可能な期間を把握（存在しないファイルはスキップ）
+ anfc_range = None
+ my_range = None
+ if FN_ANFC.exists():
+     try:
+         anfc_range = get_time_range(str(FN_ANFC))
+     except Exception:
+         anfc_range = None
+ if FN_MY.exists():
+     try:
+         my_range = get_time_range(str(FN_MY))
+     except Exception:
+         my_range = None
 
-    # ---- ANFC ----
-    with tab1:
-        if not FN_ANFC.exists():
-            st.error(f"ファイルがありません: {FN_ANFC}（repoの data/ に置いてください）")
-        else:
-            with st.spinner("ANFC を計算中..."):
-                daily_a, meta_a = load_wave_daily(str(FN_ANFC), POINT_ANFC, RANGE_ANFC)
+ # デフォルト：最新1か月（基本はANFCの末尾）
+ if anfc_range is not None:
+     end_def = min(pd.Timestamp.today().normalize(), anfc_range[1].normalize())
+     start_def = (end_def - pd.Timedelta(days=30)).normalize()
+     # 範囲外を補正
+     if start_def < anfc_range[0].normalize():
+         start_def = anfc_range[0].normalize()
+ elif my_range is not None:
+     end_def = min(pd.Timestamp.today().normalize(), my_range[1].normalize())
+     start_def = (end_def - pd.Timedelta(days=30)).normalize()
+     if start_def < my_range[0].normalize():
+         start_def = my_range[0].normalize()
+ else:
+     st.error("波浪ファイルが見つかりません（data/ に .nc を置いてください）")
+     st.stop()
 
-            st.caption(f"file={FN_ANFC.name}  selected point={meta_a['selected_point']}  vars={meta_a['vars']}")
-            status, msg, _ = classify_alerts(daily_a)
+ colp1, colp2 = st.columns([1, 1])
+ with colp1:
+     start_date = st.date_input("開始日", value=start_def.date(), key="wav_start")
+ with colp2:
+     end_date = st.date_input("終了日", value=end_def.date(), key="wav_end")
 
-            if status == "ALERT":
-                st.error(msg)
-            elif status == "WATCH":
-                st.warning(msg)
-            elif status == "OK":
-                st.success(msg)
-            else:
-                st.info(msg)
+ if start_date > end_date:
+     st.error("開始日が終了日より後になっています。")
+     st.stop()
 
-            if daily_a is not None and not daily_a.empty:
-                st.plotly_chart(plot_recent(daily_a, "直近推移（ANFC）"), use_container_width=True)
-                cols = [c for c in ["score", "Hmax", "Tp_mean", "Dir_mean", "H_idx", "T_idx", "D_idx"] if c in daily_a.columns]
-                st.dataframe(daily_a.tail(RECENT_DAYS_TABLE)[cols], use_container_width=True)
-                st.download_button("ANFC daily CSV", daily_a.to_csv(index=True).encode("utf-8"), "anfc_daily.csv", "text/csv")
+ # 期間から利用するデータセットを自動選択
+ start_ts = pd.Timestamp(start_date)
+ end_ts = pd.Timestamp(end_date)
 
-    # ---- MY ----
-    with tab2:
-        if not FN_MY.exists():
-            st.error(f"ファイルがありません: {FN_MY}（repoの data/ に置いてください）")
-        else:
-            with st.spinner("MY を計算中..."):
-                daily_m, meta_m = load_wave_daily(str(FN_MY), POINT_MY, RANGE_MY)
+ # 固定の境界（仕様どおり）
+ my_end = pd.Timestamp(RANGE_MY[1])
+ anfc_start = pd.Timestamp(RANGE_ANFC[0])
 
-            st.caption(f"file={FN_MY.name}  selected point={meta_m['selected_point']}  vars={meta_m['vars']}")
-            status, msg, _ = classify_alerts(daily_m)
+ # 期間がまたぐ場合は不可（被らない前提）
+ if start_ts <= my_end and end_ts >= anfc_start:
+     st.error("選択した期間が MY(～2022-10) と ANFC(2022-11～) をまたいでいます。どちらか片方の期間にしてください。")
+     st.stop()
 
-            if status == "ALERT":
-                st.error(msg)
-            elif status == "WATCH":
-                st.warning(msg)
-            elif status == "OK":
-                st.success(msg)
-            else:
-                st.info(msg)
+ use_kind = None
+ if end_ts <= my_end:
+     use_kind = "MY"
+ elif start_ts >= anfc_start:
+     use_kind = "ANFC"
+ else:
+     # 境界の空白期間など（基本は起こらないが念のため）
+     use_kind = "ANFC" if anfc_range is not None else "MY"
 
-            if daily_m is not None and not daily_m.empty:
-                st.plotly_chart(plot_recent(daily_m, "直近推移（MY）"), use_container_width=True)
-                cols = [c for c in ["score", "Hmax", "Tp_mean", "Dir_mean", "H_idx", "T_idx", "D_idx"] if c in daily_m.columns]
-                st.dataframe(daily_m.tail(RECENT_DAYS_TABLE)[cols], use_container_width=True)
-                st.download_button("MY daily CSV", daily_m.to_csv(index=True).encode("utf-8"), "my_daily.csv", "text/csv")
+ # ファイル・地点・利用可能範囲
+ if use_kind == "ANFC":
+     if not FN_ANFC.exists():
+         st.error(f"ファイルがありません: {FN_ANFC}（repoの data/ に置いてください）")
+         st.stop()
+     fn = str(FN_ANFC)
+     point = POINT_ANFC
+     avail = anfc_range
+ else:
+     if not FN_MY.exists():
+         st.error(f"ファイルがありません: {FN_MY}（repoの data/ に置いてください）")
+         st.stop()
+     fn = str(FN_MY)
+     point = POINT_MY
+     avail = my_range
+
+ # 利用可能範囲にクランプ
+ if avail is not None:
+     s_clamp = max(start_ts, avail[0].normalize())
+     e_clamp = min(end_ts, avail[1].normalize())
+     if (s_clamp != start_ts) or (e_clamp != end_ts):
+         st.info(f"期間をデータ範囲に合わせて補正しました：{s_clamp.date()} – {e_clamp.date()}")
+     start_ts, end_ts = s_clamp, e_clamp
+
+ # 読み込み・集計（期間をユーザー指定に置き換え）
+ with st.spinner("波浪を計算中..."):
+     daily, _meta = load_wave_daily(fn, point, (start_ts.strftime('%Y-%m-%d'), end_ts.strftime('%Y-%m-%d')))
+
+ status, msg, _ = classify_alerts(daily)
+ if status == "ALERT":
+     st.error(msg)
+ elif status == "WATCH":
+     st.warning(msg)
+ elif status == "OK":
+     st.success(msg)
+ else:
+     st.info(msg)
+
+ if daily is not None and not daily.empty:
+     st.plotly_chart(plot_recent(daily, f"直近推移（{use_kind}）"), use_container_width=True)
+
+     cols = [c for c in ["score", "Hmax", "Tp_mean", "Dir_mean", "H_idx", "T_idx", "D_idx"] if c in daily.columns]
+     dshow = daily.tail(RECENT_DAYS_TABLE)[cols].copy()
+     rename = {
+         "score": "スコア",
+         "Hmax": "波高(m)",
+         "Tp_mean": "周期(s)",
+         "Dir_mean": "波向(°)",
+         "H_idx": "波高idx",
+         "T_idx": "周期idx",
+         "D_idx": "方向idx",
+     }
+     dshow = dshow.rename(columns=rename)
+     st.dataframe(dshow, use_container_width=True)
+
+     st.download_button(f"{use_kind} daily CSV", daily.to_csv(index=True).encode("utf-8"), f"{use_kind.lower()}_daily.csv", "text/csv")
+
 
 # =====================================================
 # モード：グラフ（水温：現行踏襲）[1](https://dogyoren-my.sharepoint.com/personal/m-takahashi_gyoren_or_jp/Documents/Microsoft%20Copilot%20%E3%83%81%E3%83%A3%E3%83%83%E3%83%88%20%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB/wt_test.py)
