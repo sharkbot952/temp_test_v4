@@ -70,7 +70,7 @@ WATCH_DAYS  = 2
 LOOKBACK_DAYS = 60  # 判定に使う直近日数（固定）
 
 # 表示（固定）
-RECENT_DAYS_TABLE = 14
+RECENT_DAYS_TABLE = 10
 RECENT_DAYS_PLOT  = 45
 
 
@@ -269,6 +269,21 @@ def qscale01(s, qlow=0.05, qhigh=0.95):
     x = (s - lo) / (hi - lo)
     return np.clip(x, 0, 1)
 
+
+def scale01_lohi(s, lo, hi):
+    s = s.astype(float)
+    if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+        mn, mx = np.nanmin(s), np.nanmax(s)
+        return (s - mn) / (mx - mn + 1e-12)
+    x = (s - lo) / (hi - lo)
+    return np.clip(x, 0, 1)
+
+def calc_lohi(s, qlow=0.05, qhigh=0.95):
+    s = s.astype(float)
+    lo = np.nanquantile(s, qlow)
+    hi = np.nanquantile(s, qhigh)
+    return float(lo), float(hi)
+
 def ang_diff(a, b):
     return (a - b + 180) % 360 - 180
 
@@ -306,7 +321,7 @@ def build_dir_targets():
     ]
 
 @st.cache_data(show_spinner=False, ttl=600)
-def load_wave_daily(fn: str, point_latlon, date_range):
+def load_wave_daily(fn: str, point_latlon, date_range, ref_quantiles=None):
     """NetCDF -> 日別（Hmax, Tp_mean, Dir_mean, score）"""
     lat0, lon0 = point_latlon
     start_date, end_date = date_range
@@ -367,8 +382,16 @@ def load_wave_daily(fn: str, point_latlon, date_range):
         md = daily.index.strftime("%m-%d")
         daily = daily[md != "02-29"].copy()
 
-    daily["H_idx"] = qscale01(daily["Hmax"], Q_LOW, Q_HIGH)
-    daily["T_idx"] = qscale01(daily["Tp_mean"], Q_LOW, Q_HIGH)
+    # --- A案：正規化の基準（分位）を固定できるようにする
+    # ref_quantiles = (H_lo, H_hi, T_lo, T_hi) を渡すと、選択期間に依らず同じ基準で 0–1 化する
+    if ref_quantiles is None:
+        H_lo, H_hi = calc_lohi(daily["Hmax"], Q_LOW, Q_HIGH)
+        T_lo, T_hi = calc_lohi(daily["Tp_mean"], Q_LOW, Q_HIGH)
+    else:
+        H_lo, H_hi, T_lo, T_hi = ref_quantiles
+
+    daily["H_idx"] = scale01_lohi(daily["Hmax"], H_lo, H_hi)
+    daily["T_idx"] = scale01_lohi(daily["Tp_mean"], T_lo, T_hi)
 
     targets = build_dir_targets()
     dir0 = daily["Dir_mean"].values
@@ -436,7 +459,7 @@ def classify_alerts(daily: pd.DataFrame):
     return status, msg, {"duration_days": int(dur), "peak_score": peak_score}
 
 def plot_recent(daily: pd.DataFrame, title: str):
-    d = daily.sort_index().tail(RECENT_DAYS_PLOT).copy()
+    d = daily.sort_index().copy()
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=d.index, y=d["score"], mode="lines+markers",
@@ -543,140 +566,149 @@ if mode == "水温要約":
 # =====================================================
 elif mode == "うねり":
     
-    
- # -------------------------------------------------
- # うねり：期間選択（MY / ANFC を自動切替）
- # -------------------------------------------------
- @st.cache_data(show_spinner=False, ttl=600)
- def get_time_range(fn: str):
-     ds = xr.open_dataset(fn)
-     time_name = pick_coord(ds, ["time", "time_counter", "TIME", "valid_time"])
-     t = pd.to_datetime(ds[time_name].values)
-     tmin = pd.Timestamp(t.min())
-     tmax = pd.Timestamp(t.max())
-     if USE_JST:
-         tmin = tmin + pd.Timedelta(hours=9)
-         tmax = tmax + pd.Timedelta(hours=9)
-     return tmin, tmax
 
- # まずは利用可能な期間を把握（存在しないファイルはスキップ）
- anfc_range = None
- my_range = None
- if FN_ANFC.exists():
-     try:
-         anfc_range = get_time_range(str(FN_ANFC))
-     except Exception:
-         anfc_range = None
- if FN_MY.exists():
-     try:
-         my_range = get_time_range(str(FN_MY))
-     except Exception:
-         my_range = None
+    # -------------------------------------------------
+    # うねり：期間選択（MY / ANFC を自動切替）
+    # -------------------------------------------------
+    @st.cache_data(show_spinner=False, ttl=600)
+    def get_time_range(fn: str):
+        ds = xr.open_dataset(fn)
+        time_name = pick_coord(ds, ["time", "time_counter", "TIME", "valid_time"])
+        t = pd.to_datetime(ds[time_name].values)
+        tmin = pd.Timestamp(t.min())
+        tmax = pd.Timestamp(t.max())
+        if USE_JST:
+            tmin = tmin + pd.Timedelta(hours=9)
+            tmax = tmax + pd.Timedelta(hours=9)
+        return tmin, tmax
 
- # デフォルト：最新1か月（基本はANFCの末尾）
- if anfc_range is not None:
-     end_def = min(pd.Timestamp.today().normalize(), anfc_range[1].normalize())
-     start_def = (end_def - pd.Timedelta(days=30)).normalize()
-     # 範囲外を補正
-     if start_def < anfc_range[0].normalize():
-         start_def = anfc_range[0].normalize()
- elif my_range is not None:
-     end_def = min(pd.Timestamp.today().normalize(), my_range[1].normalize())
-     start_def = (end_def - pd.Timedelta(days=30)).normalize()
-     if start_def < my_range[0].normalize():
-         start_def = my_range[0].normalize()
- else:
-     st.error("波浪ファイルが見つかりません（data/ に .nc を置いてください）")
-     st.stop()
+    # 利用可能な期間を把握（存在しないファイルはスキップ）
+    anfc_range = get_time_range(str(FN_ANFC)) if FN_ANFC.exists() else None
+    my_range = get_time_range(str(FN_MY)) if FN_MY.exists() else None
 
- colp1, colp2 = st.columns([1, 1])
- with colp1:
-     start_date = st.date_input("開始日", value=start_def.date(), key="wav_start")
- with colp2:
-     end_date = st.date_input("終了日", value=end_def.date(), key="wav_end")
+    # デフォルト：最新1か月（基本は ANFC の末尾）
+    if anfc_range is not None:
+        end_def = min(pd.Timestamp.today().normalize(), anfc_range[1].normalize())
+        start_def = (end_def - pd.Timedelta(days=30)).normalize()
+        if start_def < anfc_range[0].normalize():
+            start_def = anfc_range[0].normalize()
+    elif my_range is not None:
+        end_def = min(pd.Timestamp.today().normalize(), my_range[1].normalize())
+        start_def = (end_def - pd.Timedelta(days=30)).normalize()
+        if start_def < my_range[0].normalize():
+            start_def = my_range[0].normalize()
+    else:
+        st.error("波浪ファイルが見つかりません（data/ に .nc を置いてください）")
+        st.stop()
 
- if start_date > end_date:
-     st.error("開始日が終了日より後になっています。")
-     st.stop()
+    colp1, colp2 = st.columns([1, 1])
+    with colp1:
+        start_date = st.date_input("開始日", value=start_def.date(), key="wav_start")
+    with colp2:
+        end_date = st.date_input("終了日", value=end_def.date(), key="wav_end")
 
- # 期間から利用するデータセットを自動選択
- start_ts = pd.Timestamp(start_date)
- end_ts = pd.Timestamp(end_date)
+    if start_date > end_date:
+        st.error("開始日が終了日より後になっています。")
+        st.stop()
 
- # 固定の境界（仕様どおり）
- my_end = pd.Timestamp(RANGE_MY[1])
- anfc_start = pd.Timestamp(RANGE_ANFC[0])
+    start_ts = pd.Timestamp(start_date)
+    end_ts = pd.Timestamp(end_date)
 
- # 期間がまたぐ場合は不可（被らない前提）
- if start_ts <= my_end and end_ts >= anfc_start:
-     st.error("選択した期間が MY(～2022-10) と ANFC(2022-11～) をまたいでいます。どちらか片方の期間にしてください。")
-     st.stop()
+    # 境界（被らない前提）
+    my_end = pd.Timestamp(RANGE_MY[1])
+    anfc_start = pd.Timestamp(RANGE_ANFC[0])
+    if start_ts <= my_end and end_ts >= anfc_start:
+        st.error("選択した期間が MY(～2022-10) と ANFC(2022-11～) をまたいでいます。どちらか片方の期間にしてください。")
+        st.stop()
 
- use_kind = None
- if end_ts <= my_end:
-     use_kind = "MY"
- elif start_ts >= anfc_start:
-     use_kind = "ANFC"
- else:
-     # 境界の空白期間など（基本は起こらないが念のため）
-     use_kind = "ANFC" if anfc_range is not None else "MY"
+    # どちらのデータセットを使うか
+    if end_ts <= my_end:
+        use_kind = "MY"
+    elif start_ts >= anfc_start:
+        use_kind = "ANFC"
+    else:
+        use_kind = "ANFC" if anfc_range is not None else "MY"
 
- # ファイル・地点・利用可能範囲
- if use_kind == "ANFC":
-     if not FN_ANFC.exists():
-         st.error(f"ファイルがありません: {FN_ANFC}（repoの data/ に置いてください）")
-         st.stop()
-     fn = str(FN_ANFC)
-     point = POINT_ANFC
-     avail = anfc_range
- else:
-     if not FN_MY.exists():
-         st.error(f"ファイルがありません: {FN_MY}（repoの data/ に置いてください）")
-         st.stop()
-     fn = str(FN_MY)
-     point = POINT_MY
-     avail = my_range
+    if use_kind == "ANFC":
+        if not FN_ANFC.exists():
+            st.error(f"ファイルがありません: {FN_ANFC}（repoの data/ に置いてください）")
+            st.stop()
+        fn = str(FN_ANFC)
+        point = POINT_ANFC
+        avail = anfc_range
+    else:
+        if not FN_MY.exists():
+            st.error(f"ファイルがありません: {FN_MY}（repoの data/ に置いてください）")
+            st.stop()
+        fn = str(FN_MY)
+        point = POINT_MY
+        avail = my_range
 
- # 利用可能範囲にクランプ
- if avail is not None:
-     s_clamp = max(start_ts, avail[0].normalize())
-     e_clamp = min(end_ts, avail[1].normalize())
-     if (s_clamp != start_ts) or (e_clamp != end_ts):
-         st.info(f"期間をデータ範囲に合わせて補正しました：{s_clamp.date()} – {e_clamp.date()}")
-     start_ts, end_ts = s_clamp, e_clamp
+    # 利用可能範囲にクランプ
+    if avail is not None:
+        s_clamp = max(start_ts, avail[0].normalize())
+        e_clamp = min(end_ts, avail[1].normalize())
+        if (s_clamp != start_ts) or (e_clamp != end_ts):
+            st.info(f"期間をデータ範囲に合わせて補正しました：{s_clamp.date()} – {e_clamp.date()}")
+        start_ts, end_ts = s_clamp, e_clamp
 
- # 読み込み・集計（期間をユーザー指定に置き換え）
- with st.spinner("波浪を計算中..."):
-     daily, _meta = load_wave_daily(fn, point, (start_ts.strftime('%Y-%m-%d'), end_ts.strftime('%Y-%m-%d')))
+    # A案：正規化基準（分位）を「データセット全体」で固定
+    with st.spinner("波浪を計算中..."):
+        if avail is not None:
+            ref_s = avail[0].normalize()
+            ref_e = avail[1].normalize()
+        else:
+            ref_s = pd.Timestamp(RANGE_ANFC[0]) if use_kind == "ANFC" else pd.Timestamp(RANGE_MY[0])
+            ref_e = pd.Timestamp(RANGE_ANFC[1]) if use_kind == "ANFC" else pd.Timestamp(RANGE_MY[1])
 
- status, msg, _ = classify_alerts(daily)
- if status == "ALERT":
-     st.error(msg)
- elif status == "WATCH":
-     st.warning(msg)
- elif status == "OK":
-     st.success(msg)
- else:
-     st.info(msg)
+        daily_ref, _ = load_wave_daily(fn, point, (ref_s.strftime('%Y-%m-%d'), ref_e.strftime('%Y-%m-%d')))
+        if daily_ref is None or daily_ref.empty:
+            daily = daily_ref
+        else:
+            H_lo, H_hi = calc_lohi(daily_ref["Hmax"], Q_LOW, Q_HIGH)
+            T_lo, T_hi = calc_lohi(daily_ref["Tp_mean"], Q_LOW, Q_HIGH)
+            ref_q = (H_lo, H_hi, T_lo, T_hi)
+            daily, _meta = load_wave_daily(
+                fn,
+                point,
+                (start_ts.strftime('%Y-%m-%d'), end_ts.strftime('%Y-%m-%d')),
+                ref_quantiles=ref_q,
+            )
 
- if daily is not None and not daily.empty:
-     st.plotly_chart(plot_recent(daily, f"直近推移（{use_kind}）"), use_container_width=True)
+    status, msg, _ = classify_alerts(daily)
+    if status == "ALERT":
+        st.error(msg)
+    elif status == "WATCH":
+        st.warning(msg)
+    elif status == "OK":
+        st.success(msg)
+    else:
+        st.info(msg)
 
-     cols = [c for c in ["score", "Hmax", "Tp_mean", "Dir_mean", "H_idx", "T_idx", "D_idx"] if c in daily.columns]
-     dshow = daily.tail(RECENT_DAYS_TABLE)[cols].copy()
-     rename = {
-         "score": "スコア",
-         "Hmax": "波高(m)",
-         "Tp_mean": "周期(s)",
-         "Dir_mean": "波向(°)",
-         "H_idx": "波高idx",
-         "T_idx": "周期idx",
-         "D_idx": "方向idx",
-     }
-     dshow = dshow.rename(columns=rename)
-     st.dataframe(dshow, use_container_width=True)
+    if daily is not None and not daily.empty:
+        # グラフ：開始日～終了日の範囲をそのまま表示
+        st.plotly_chart(plot_recent(daily, f"期間推移（{use_kind}）"), use_container_width=True)
 
-     st.download_button(f"{use_kind} daily CSV", daily.to_csv(index=True).encode("utf-8"), f"{use_kind.lower()}_daily.csv", "text/csv")
+        # 表：最新日から10日分のみ表示
+        cols = [c for c in ["score", "Hmax", "Tp_mean", "Dir_mean", "H_idx", "T_idx", "D_idx"] if c in daily.columns]
+        dshow = daily.sort_index().tail(RECENT_DAYS_TABLE)[cols].copy()
+        rename = {
+            "score": "スコア",
+            "Hmax": "波高(m)",
+            "Tp_mean": "周期(s)",
+            "Dir_mean": "波向(°)",
+            "H_idx": "波高idx",
+            "T_idx": "周期idx",
+            "D_idx": "方向idx",
+        }
+        st.dataframe(dshow.rename(columns=rename), use_container_width=True)
+
+        st.download_button(
+            f"{use_kind} daily CSV",
+            daily.to_csv(index=True).encode("utf-8"),
+            f"{use_kind.lower()}_daily.csv",
+            "text/csv",
+        )
 
 
 # =====================================================
