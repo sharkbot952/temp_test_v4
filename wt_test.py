@@ -12,7 +12,7 @@ import plotly.express as px
 # =====================================================
 # ページ設定
 # =====================================================
-st.set_page_config(page_title="試験版", layout="wide")
+st.set_page_config(page_title="", layout="wide")
 
 # =====================================================
 # パス（Streamlit Cloud想定：リポジトリ相対のみ）
@@ -453,13 +453,13 @@ if CSV_PATH.exists():
 # =====================================================
 # UI：モード
 # =====================================================
-st.title("試験版")
-mode = pill_toggle(["水温要約", "うねり", "グラフ"], default="水温要約", key="mode")
+#st.title("試験版")
+mode = pill_toggle(["水温", "うねり", "グラフ"], default="水温", key="mode")
 
 # =====================================================
 # モード：水温要約
 # =====================================================
-if mode == "水温要約":
+if mode == "水温":
     if df_raw is None:
         st.error(f"CSV が見つかりません: {CSV_PATH}（repoの data/ に置いてください）")
         st.stop()
@@ -735,7 +735,7 @@ else:
                     continue
                 add_band(fig, d2["X"], d2["min"], d2["max"], colors_sec[y], alpha=0.12, yaxis="y2")
                 add_line(fig, d2["X"], d2["mean"], colors_sec[y], f"{y} {sec_label}",
-                         yaxis="y2", width=2.0, dash="dash", alpha=0.95)
+                         yaxis="y2", width=1.5, dash="dash", alpha=0.55)
 
         layout = dict(
             template="plotly_white",
@@ -769,7 +769,7 @@ else:
                     continue
                 add_band(fig, d2["AlignX"], d2["min"], d2["max"], colors_sec[y], alpha=0.12, yaxis="y2")
                 add_line(fig, d2["AlignX"], d2["mean"], colors_sec[y], f"{y} {sec_label}",
-                         yaxis="y2", width=2.0, dash="dash", alpha=0.95)
+                         yaxis="y2", width=1.5, dash="dash", alpha=0.55)
 
         layout = dict(
             template="plotly_white",
