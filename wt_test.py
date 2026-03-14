@@ -21,7 +21,7 @@ APP_DIR = Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"
 CSV_PATH = DATA_DIR / "Taiki_temp.csv"
 FN_MY = DATA_DIR / "wav_20200101_20221031_asahihama_BOXWIDE.nc"
-FN_ANFC = DATA_DIR / "wav_202211_20260322_asahihama_BOXWIDE.nc"
+FN_ANFC = DATA_DIR / "wav_asahihama_BOXWIDE.nc"
 
 # =====================================================
 # 水温側：固定設定
