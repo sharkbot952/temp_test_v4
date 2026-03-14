@@ -527,12 +527,12 @@ elif mode == "うねり":
 
     if anfc_range is not None:
         end_def = anfc_range[1].normalize()
-        start_def = (end_def - pd.Timedelta(days=10)).normalize()
+        start_def = (end_def - pd.Timedelta(days=21)).normalize()
         if start_def < anfc_range[0].normalize():
             start_def = anfc_range[0].normalize()
     elif my_range is not None:
         end_def = my_range[1].normalize()
-        start_def = (end_def - pd.Timedelta(days=10)).normalize()
+        start_def = (end_def - pd.Timedelta(days=21)).normalize()
         if start_def < my_range[0].normalize():
             start_def = my_range[0].normalize()
     else:
@@ -556,7 +556,7 @@ elif mode == "うねり":
     anfc_start = pd.Timestamp(RANGE_ANFC[0])
 
     if start_ts <= my_end and end_ts >= anfc_start:
-        st.error("選択した期間が MY(～2022-10) と ANFC(2022-11～) をまたいでいます。どちらか片方の期間にしてください。")
+        st.error("選択した期間が 再解析(～2022-10) と 解析予測(2022-11～) をまたいでいます。どちらか片方の期間にしてください。")
         st.stop()
 
     if end_ts <= my_end:
@@ -571,7 +571,7 @@ elif mode == "うねり":
         avail = anfc_range
 
     if not Path(fn).exists():
-        st.error("波浪ファイルがありません（data/ に .nc を置いてください）")
+        st.error("ファイルがありません（data/ に .nc を置いてください）")
         st.stop()
 
     if avail is not None:
