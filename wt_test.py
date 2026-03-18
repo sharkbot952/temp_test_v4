@@ -14,14 +14,13 @@ import plotly.express as px
 # =====================================================
 st.set_page_config(page_title="", layout="wide")
 
-# =====================================================
-# パス（Streamlit Cloud想定：リポジトリ相対のみ）
-# =====================================================
 APP_DIR = Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"
 CSV_PATH = DATA_DIR / "Taiki_temp.csv"
-FN_MY = DATA_DIR / "wav_20200101_20221031_asahihama_BOXWIDE.nc"
-FN_ANFC = DATA_DIR / "wav_asahihama_BOXWIDE.nc"
+
+# ★点切り抜き済みWAV（位置は確定済みなのでPOINTは不要）
+FN_MY   = DATA_DIR / "cmem_wav_MY.nc"
+FN_ANFC = DATA_DIR / "cmem_wav_ANFC.nc"
 
 # =====================================================
 # 水温側：固定設定
@@ -34,10 +33,9 @@ HOT_RED = "#d32f2f"
 # =====================================================
 # 波浪側：固定設定（スコア等はUIで変更させない）
 # =====================================================
-POINT_MY = (42.0, 143.1999969482422)  # (lat, lon)
-POINT_ANFC = (42.16666666666666, 143.41666666666663)
-RANGE_MY = ("2020-01-01", "2022-10-31")
-RANGE_ANFC = ("2022-11-01", "2026-03-21")
+# ★点ncなので位置指定は不要（旧POINT_*は廃止）
+POINT_MY = None
+POINT_ANFC = None
 
 USE_JST = True
 DROP_LEAPDAY = True
@@ -69,7 +67,6 @@ RECENT_DAYS_TABLE = 10  # 表は最新10日
 # =====================================================
 # UI（ピル型ボタン）ユーティリティ
 # =====================================================
-
 def pill_toggle(options, default, key, label=""):
     """segmented_control（ピル）優先。無ければ radio(horizontal) にフォールバック。"""
     try:
@@ -94,7 +91,6 @@ def pill_toggle(options, default, key, label=""):
 # =====================================================
 # 水温：共通ユーティリティ
 # =====================================================
-
 def safe_row_mean(df, cols):
     cols = [c for c in cols if c in df.columns]
     if not cols:
@@ -157,7 +153,6 @@ def add_line(fig, x, y, color, name, yaxis="y", width=2.2, dash=None, alpha=1.0)
 # =====================================================
 # 水温：要約ユーティリティ
 # =====================================================
-
 def dekad(day: int):
     if day <= 10:
         return "上旬"
@@ -189,7 +184,6 @@ def build_month_dekad_by_year(df, month, years):
 # =====================================================
 # 水温：データ読み込み
 # =====================================================
-
 @st.cache_data(show_spinner="データ読み込み中...", ttl=600)
 def load_raw(csv_path: Path, _hash_val: str):
     df = pd.read_csv(str(csv_path), encoding=ENCODING)
@@ -209,7 +203,6 @@ def load_raw(csv_path: Path, _hash_val: str):
 # =====================================================
 # 波浪：共通関数
 # =====================================================
-
 def pick_coord(ds, candidates):
     for c in candidates:
         if c in ds.coords or c in ds.dims:
@@ -224,16 +217,6 @@ def pick_var(dsobj, base_names):
         if any(v.startswith(b) for b in base_names):
             return v
     raise KeyError(f"Variable not found: {base_names} / available={list(dsobj.data_vars)}")
-
-def qscale01(s, qlow=0.05, qhigh=0.95):
-    s = s.astype(float)
-    lo = np.nanquantile(s, qlow)
-    hi = np.nanquantile(s, qhigh)
-    if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
-        mn, mx = np.nanmin(s), np.nanmax(s)
-        return (s - mn) / (mx - mn + 1e-12)
-    x = (s - lo) / (hi - lo)
-    return np.clip(x, 0, 1)
 
 def scale01_lohi(s, lo, hi):
     s = s.astype(float)
@@ -286,15 +269,16 @@ def build_dir_targets():
 
 @st.cache_data(show_spinner=False, ttl=600)
 def load_wave_daily(fn: str, point_latlon, date_range, ref_quantiles=None):
-    """NetCDF -> 日別（Hmax, Tp_mean, Dir_mean, score）"""
-    lat0, lon0 = point_latlon
+    """NetCDF -> 日別（Hmax, Tp_mean, Dir_mean, score）
+       ※点切り抜き済みncなら point_latlon=None でOK（位置指定を不要化）
+    """
     start_date, end_date = date_range
 
     ds = xr.open_dataset(fn)
 
     time_name = pick_coord(ds, ["time", "time_counter", "TIME", "valid_time"])
-    lat_name = pick_coord(ds, ["lat", "latitude", "LATITUDE", "nav_lat"])
-    lon_name = pick_coord(ds, ["lon", "longitude", "LONGITUDE", "nav_lon"])
+    lat_name  = pick_coord(ds, ["lat", "latitude", "LATITUDE", "nav_lat"])
+    lon_name  = pick_coord(ds, ["lon", "longitude", "LONGITUDE", "nav_lon"])
 
     start = pd.Timestamp(start_date)
     end = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
@@ -305,13 +289,25 @@ def load_wave_daily(fn: str, point_latlon, date_range, ref_quantiles=None):
         start_utc, end_utc = start, end
 
     ds = ds.sel({time_name: slice(start_utc, end_utc)})
-    pt = ds.sel({lat_name: lat0, lon_name: lon0}, method="nearest")
+
+    # ---- ここが修正点：点切り抜き済みncなら位置指定を不要化 ----
+    if point_latlon is None:
+        # lat/lon が単一点ならそのまま
+        if (lat_name in ds.coords and ds[lat_name].size == 1) and (lon_name in ds.coords and ds[lon_name].size == 1):
+            pt = ds
+        else:
+            ds.close()
+            raise ValueError("point_latlon is None but dataset has multiple lat/lon cells. Provide point_latlon.")
+    else:
+        lat0, lon0 = point_latlon
+        pt = ds.sel({lat_name: lat0, lon_name: lon0}, method="nearest")
 
     v_h = pick_var(pt, ["VHM0"])
     v_t = pick_var(pt, ["VTPK"])
     v_d = pick_var(pt, ["VMDR"])
 
     df = pt[[v_h, v_t, v_d]].to_dataframe().reset_index()
+
     tcol = time_name if time_name in df.columns else (
         "time" if "time" in df.columns else [c for c in df.columns if "time" in c.lower()][0]
     )
@@ -333,6 +329,8 @@ def load_wave_daily(fn: str, point_latlon, date_range, ref_quantiles=None):
         }
     ).dropna()
 
+    ds.close()
+
     if daily.empty:
         return daily, {}
 
@@ -340,7 +338,7 @@ def load_wave_daily(fn: str, point_latlon, date_range, ref_quantiles=None):
         md = daily.index.strftime("%m-%d")
         daily = daily[md != "02-29"].copy()
 
-    # --- A案：正規化の基準（分位）を固定できるようにする
+    # 正規化基準
     if ref_quantiles is None:
         H_lo, H_hi = calc_lohi(daily["Hmax"], Q_LOW, Q_HIGH)
         T_lo, T_hi = calc_lohi(daily["Tp_mean"], Q_LOW, Q_HIGH)
@@ -369,7 +367,7 @@ def load_wave_daily(fn: str, point_latlon, date_range, ref_quantiles=None):
     return daily, {}
 
 def classify_alerts(daily: pd.DataFrame):
-    """score>=0.5 連続4日以上=警報、2-3日=注意報"""
+    """score>=ALERT_SCORE 連続ALERT_DAYS以上=警報、WATCH_DAYS以上=注意報"""
     if daily is None or daily.empty or "score" not in daily.columns:
         return "NO_DATA", "データがありません（期間/格子点/欠損の可能性）。", {}
 
@@ -453,7 +451,6 @@ if CSV_PATH.exists():
 # =====================================================
 # UI：モード
 # =====================================================
-#st.title("試験版")
 mode = pill_toggle(["水温", "うねり", "グラフ"], default="水温", key="mode")
 
 # =====================================================
@@ -475,7 +472,7 @@ if mode == "水温":
 
         for y, info in summary[dk].items():
             if info is None:
-                continue  # データなしは表示しない
+                continue
 
             is_hot = (info["mean"] >= 20.0) or (info["max"] >= 20.0)
             color_main = HOT_RED if is_hot else "#000000"
@@ -517,13 +514,14 @@ elif mode == "うねり":
         t = pd.to_datetime(ds[time_name].values)
         tmin = pd.Timestamp(t.min())
         tmax = pd.Timestamp(t.max())
+        ds.close()
         if USE_JST:
             tmin = tmin + pd.Timedelta(hours=9)
             tmax = tmax + pd.Timedelta(hours=9)
         return tmin, tmax
 
     anfc_range = get_time_range(str(FN_ANFC)) if FN_ANFC.exists() else None
-    my_range = get_time_range(str(FN_MY)) if FN_MY.exists() else None
+    my_range   = get_time_range(str(FN_MY)) if FN_MY.exists() else None
 
     if anfc_range is not None:
         end_def = anfc_range[1].normalize()
@@ -552,28 +550,40 @@ elif mode == "うねり":
     start_ts = pd.Timestamp(start_date)
     end_ts = pd.Timestamp(end_date)
 
-    my_end = pd.Timestamp(RANGE_MY[1])
-    anfc_start = pd.Timestamp(RANGE_ANFC[0])
+    # ★固定のRANGE_* は使わず、ファイルの実データ範囲でMY/ANFCを判定する
+    if (my_range is not None) and (start_ts <= my_range[1].normalize()) and (end_ts >= my_range[0].normalize()):
+        hit_my = True
+    else:
+        hit_my = False
 
-    if start_ts <= my_end and end_ts >= anfc_start:
-        st.error("選択した期間が 再解析(～2022-10) と 解析予測(2022-11～) をまたいでいます。どちらか片方の期間にしてください。")
+    if (anfc_range is not None) and (start_ts <= anfc_range[1].normalize()) and (end_ts >= anfc_range[0].normalize()):
+        hit_anfc = True
+    else:
+        hit_anfc = False
+
+    if hit_my and hit_anfc:
+        st.error("選択した期間が MY と ANFC をまたいでいます。どちらか片方の期間にしてください。")
         st.stop()
 
-    if end_ts <= my_end:
-        use_kind = "MY"
-        fn = str(FN_MY)
-        point = POINT_MY
-        avail = my_range
-    else:
+    if hit_anfc:
         use_kind = "ANFC"
         fn = str(FN_ANFC)
-        point = POINT_ANFC
+        point = POINT_ANFC  # None
         avail = anfc_range
+    elif hit_my:
+        use_kind = "MY"
+        fn = str(FN_MY)
+        point = POINT_MY  # None
+        avail = my_range
+    else:
+        st.error("選択した期間がデータ範囲外です。開始日・終了日を見直してください。")
+        st.stop()
 
     if not Path(fn).exists():
         st.error("ファイルがありません（data/ に .nc を置いてください）")
         st.stop()
 
+    # データ範囲に合わせてクランプ
     if avail is not None:
         s_clamp = max(start_ts, avail[0].normalize())
         e_clamp = min(end_ts, avail[1].normalize())
@@ -582,12 +592,8 @@ elif mode == "うねり":
         start_ts, end_ts = s_clamp, e_clamp
 
     with st.spinner("波浪を計算中..."):
-        if avail is not None:
-            ref_s = avail[0].normalize()
-            ref_e = avail[1].normalize()
-        else:
-            ref_s = pd.Timestamp(RANGE_ANFC[0]) if use_kind == "ANFC" else pd.Timestamp(RANGE_MY[0])
-            ref_e = pd.Timestamp(RANGE_ANFC[1]) if use_kind == "ANFC" else pd.Timestamp(RANGE_MY[1])
+        ref_s = avail[0].normalize()
+        ref_e = avail[1].normalize()
 
         daily_ref, _ = load_wave_daily(fn, point, (ref_s.strftime("%Y-%m-%d"), ref_e.strftime("%Y-%m-%d")))
         if daily_ref is None or daily_ref.empty:
@@ -643,7 +649,6 @@ else:
         st.error(f"CSV が見つかりません: {CSV_PATH}（repoの data/ に置いてください）")
         st.stop()
 
-    # 3列：副軸 / 集計 / 年（移動平均の選択は無し）
     c0, c1, c3 = st.columns([1.0, 1.1, 3.0])
 
     with c0:
@@ -659,7 +664,6 @@ else:
     agg_mode = "datetime" if agg_label == "日時" else "daily"
 
     colors = year_color_map(selected_years)
-    # 副軸は水温と同系色（破線で区別）
     colors_sec = {y: colors[y] for y in selected_years}
 
     sec_metric = {"Sal": "Sal(1m)", "DO": "DO(3m)"}.get(sec_label)
@@ -715,12 +719,10 @@ else:
 
     tab_ts, tab_md = st.tabs(["時系列", "同月日比較"])
 
-    # 凡例：下側に横並び（スマホ想定）
     legend_cfg = dict(orientation="h", yanchor="top", y=-0.22, xanchor="left", x=0)
 
     with tab_ts:
         fig = go.Figure()
-
         for y in selected_years:
             d = ts_stats[ts_stats["Year"] == y]
             if d.empty:
@@ -754,7 +756,6 @@ else:
 
     with tab_md:
         fig = go.Figure()
-
         for y in selected_years:
             d = md_stats[md_stats["Year"] == y]
             if d.empty:
