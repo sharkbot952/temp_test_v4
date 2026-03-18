@@ -591,46 +591,46 @@ elif mode == "うねり":
             st.info(f"期間をデータ範囲に合わせて補正しました：{s_clamp.date()} – {e_clamp.date()}")
         start_ts, end_ts = s_clamp, e_clamp
 
-	with st.spinner("波浪を計算中..."):
-	    # --- 参照（正規化）基準の作り方だけを ANFC 時に変更する ---
-	    if use_kind == "ANFC" and (my_range is not None) and FN_MY.exists() and (anfc_range is not None) and 	FN_ANFC.exists():
-	        # MY + ANFC の全期間を参照系列として結合（分位点の安定化）
-	        my_s = my_range[0].normalize()
-	        my_e = my_range[1].normalize()
-	        an_s = anfc_range[0].normalize()
-	        an_e = anfc_range[1].normalize()
+    with st.spinner("波浪を計算中..."):
+    # --- 参照（正規化）基準の作り方だけを ANFC 時に変更する ---
+    if use_kind == "ANFC" and (my_range is not None) and FN_MY.exists() and (anfc_range is not None) and FN_ANFC.exists():
+        # MY + ANFC の全期間を参照系列として結合（分位点の安定化）
+        my_s = my_range[0].normalize()
+        my_e = my_range[1].normalize()
+        an_s = anfc_range[0].normalize()
+        an_e = anfc_range[1].normalize()
 
-	        daily_my, _ = load_wave_daily(
-	            str(FN_MY), POINT_MY,
-	            (my_s.strftime("%Y-%m-%d"), my_e.strftime("%Y-%m-%d"))
-	        )
-	        daily_an, _ = load_wave_daily(
-	            str(FN_ANFC), POINT_ANFC,
-	            (an_s.strftime("%Y-%m-%d"), an_e.strftime("%Y-%m-%d"))
-	        )
+        daily_my, _ = load_wave_daily(
+            str(FN_MY), POINT_MY,
+            (my_s.strftime("%Y-%m-%d"), my_e.strftime("%Y-%m-%d"))
+        )
+        daily_an, _ = load_wave_daily(
+            str(FN_ANFC), POINT_ANFC,
+            (an_s.strftime("%Y-%m-%d"), an_e.strftime("%Y-%m-%d"))
+        )
 
-	        daily_ref = pd.concat([daily_my, daily_an], axis=0).sort_index()
-	    else:
-	        # 従来どおり：選択したファイルの全期間を参照にする
-	        ref_s = avail[0].normalize()
-	        ref_e = avail[1].normalize()
-	        daily_ref, _ = load_wave_daily(
-	            fn, point,
-	            (ref_s.strftime("%Y-%m-%d"), ref_e.strftime("%Y-%m-%d"))
-	        )
+        daily_ref = pd.concat([daily_my, daily_an], axis=0).sort_index()
+    else:
+        # 従来どおり：選択したファイルの全期間を参照にする
+        ref_s = avail[0].normalize()
+        ref_e = avail[1].normalize()
+        daily_ref, _ = load_wave_daily(
+            fn, point,
+            (ref_s.strftime("%Y-%m-%d"), ref_e.strftime("%Y-%m-%d"))
+        )
 
-	    if daily_ref is None or daily_ref.empty:
-	        daily = daily_ref
-	    else:
-	        H_lo, H_hi = calc_lohi(daily_ref["Hmax"], Q_LOW, Q_HIGH)
-	        T_lo, T_hi = calc_lohi(daily_ref["Tp_mean"], Q_LOW, Q_HIGH)
-	        ref_q = (H_lo, H_hi, T_lo, T_hi)
+    if daily_ref is None or daily_ref.empty:
+        daily = daily_ref
+    else:
+        H_lo, H_hi = calc_lohi(daily_ref["Hmax"], Q_LOW, Q_HIGH)
+        T_lo, T_hi = calc_lohi(daily_ref["Tp_mean"], Q_LOW, Q_HIGH)
+        ref_q = (H_lo, H_hi, T_lo, T_hi)
 
-	        daily, _ = load_wave_daily(
-	            fn, point,
-	            (start_ts.strftime("%Y-%m-%d"), end_ts.strftime("%Y-%m-%d")),
-	            ref_quantiles=ref_q
-	        )
+        daily, _ = load_wave_daily(
+            fn, point,
+            (start_ts.strftime("%Y-%m-%d"), end_ts.strftime("%Y-%m-%d")),
+            ref_quantiles=ref_q
+        )
 
     status, msg, _ = classify_alerts(daily)
     if status == "ALERT":
