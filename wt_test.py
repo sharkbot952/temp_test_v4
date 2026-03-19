@@ -694,12 +694,12 @@ else:
         st.stop()
 
 
- # --- CMEM（モデル水温）読み込み（存在すれば） ---
- df_cmem = None
- if CMEM_THETAO_CSV_PATH.exists():
-     cmem_bytes = CMEM_THETAO_CSV_PATH.read_bytes()
-     cmem_hash = f"{hashlib.sha1(cmem_bytes).hexdigest()}_{len(cmem_bytes)}"
-     df_cmem = load_cmem_thetao(CMEM_THETAO_CSV_PATH, cmem_hash)
+    # --- CMEM（モデル水温）読み込み（存在すれば） ---
+    df_cmem = None
+    if CMEM_THETAO_CSV_PATH.exists():
+        cmem_bytes = CMEM_THETAO_CSV_PATH.read_bytes()
+        cmem_hash = f"{hashlib.sha1(cmem_bytes).hexdigest()}_{len(cmem_bytes)}"
+        df_cmem = load_cmem_thetao(CMEM_THETAO_CSV_PATH, cmem_hash)
     c0, c1, c3 = st.columns([1.0, 1.1, 3.0])
 
     with c0:
@@ -774,27 +774,27 @@ else:
 
     with tab_ts:
         fig = go.Figure()
- # --- CMEM（モデル水温）：同一Xで min/max の帯を重ねる（主軸ではないため薄く表示）
- cmem_ts_stats = None
- if df_cmem is not None and (not df_cmem.empty):
-     dcm = df_cmem[["Date_JST", "Temp"]].dropna().copy()
-     if agg_mode == "daily":
-         dcm["X"] = dcm["Date_JST"].dt.floor("D")
-     else:
-         dcm["X"] = dcm["Date_JST"]
-     cmem_ts_stats = dcm.groupby("X")["Temp"].agg(["mean", "min", "max"]).reset_index()
+        # --- CMEM（モデル水温）：同一Xで min/max の帯を重ねる（主軸ではないため薄く表示）
+        cmem_ts_stats = None
+        if df_cmem is not None and (not df_cmem.empty):
+            dcm = df_cmem[["Date_JST", "Temp"]].dropna().copy()
+            if agg_mode == "daily":
+                dcm["X"] = dcm["Date_JST"].dt.floor("D")
+            else:
+                dcm["X"] = dcm["Date_JST"]
+            cmem_ts_stats = dcm.groupby("X")["Temp"].agg(["mean", "min", "max"]).reset_index()
         for y in selected_years:
             d = ts_stats[ts_stats["Year"] == y]
             if d.empty:
                 continue
             add_band(fig, d["X"], d["min"], d["max"], colors[y], alpha=0.25, yaxis="y")
             add_line(fig, d["X"], d["mean"], colors[y], f"{y} 水温", yaxis="y", width=2.4)
- # --- CMEM overlay（主軸y） ---
- if 'cmem_ts_stats' in locals() and cmem_ts_stats is not None and (not cmem_ts_stats.empty):
-     add_band(fig, cmem_ts_stats["X"], cmem_ts_stats["min"], cmem_ts_stats["max"], "#1976d2", alpha=0.10, yaxis="y")
-     add_line(fig, cmem_ts_stats["X"], cmem_ts_stats["mean"], "#1976d2", "CMEM 平均(モデル)", yaxis="y", width=1.4, dash="dot", alpha=0.65)
+        # --- CMEM overlay（主軸y） ---
+        if 'cmem_ts_stats' in locals() and cmem_ts_stats is not None and (not cmem_ts_stats.empty):
+            add_band(fig, cmem_ts_stats["X"], cmem_ts_stats["min"], cmem_ts_stats["max"], "#1976d2", alpha=0.10, yaxis="y")
+            add_line(fig, cmem_ts_stats["X"], cmem_ts_stats["mean"], "#1976d2", "CMEM 平均(モデル)", yaxis="y", width=1.4, dash="dot", alpha=0.65)
 
- if ts_sec is not None:
+        if ts_sec is not None:
             for y in selected_years:
                 d2 = ts_sec[ts_sec["Year"] == y]
                 if d2.empty:
@@ -820,31 +820,31 @@ else:
 
     with tab_md:
         fig = go.Figure()
- # --- CMEM（モデル水温）：同月日比較用（年=2001へ整列）
- cmem_md_stats = None
- if df_cmem is not None and (not df_cmem.empty):
-     dcm = df_cmem[["Date_JST", "Temp"]].dropna().copy()
-     dcm["Month"] = dcm["Date_JST"].dt.month
-     dcm["Day"] = dcm["Date_JST"].dt.day
-     dcm = dcm[~((dcm["Month"] == 2) & (dcm["Day"] == 29))]
-     if agg_mode == "daily":
-         dcm["AlignX"] = pd.to_datetime(dict(year=2001, month=dcm["Month"], day=dcm["Day"]))
-     else:
-         t = dcm["Date_JST"].dt
-         dcm["AlignX"] = pd.to_datetime(dict(year=2001, month=dcm["Month"], day=dcm["Day"], hour=t.hour, minute=t.minute, second=t.second))
-     cmem_md_stats = dcm.groupby("AlignX")["Temp"].agg(["mean", "min", "max"]).reset_index()
+        # --- CMEM（モデル水温）：同月日比較用（年=2001へ整列）
+        cmem_md_stats = None
+        if df_cmem is not None and (not df_cmem.empty):
+            dcm = df_cmem[["Date_JST", "Temp"]].dropna().copy()
+            dcm["Month"] = dcm["Date_JST"].dt.month
+            dcm["Day"] = dcm["Date_JST"].dt.day
+            dcm = dcm[~((dcm["Month"] == 2) & (dcm["Day"] == 29))]
+            if agg_mode == "daily":
+                dcm["AlignX"] = pd.to_datetime(dict(year=2001, month=dcm["Month"], day=dcm["Day"]))
+            else:
+                t = dcm["Date_JST"].dt
+                dcm["AlignX"] = pd.to_datetime(dict(year=2001, month=dcm["Month"], day=dcm["Day"], hour=t.hour, minute=t.minute, second=t.second))
+            cmem_md_stats = dcm.groupby("AlignX")["Temp"].agg(["mean", "min", "max"]).reset_index()
         for y in selected_years:
             d = md_stats[md_stats["Year"] == y]
             if d.empty:
                 continue
             add_band(fig, d["AlignX"], d["min"], d["max"], colors[y], alpha=0.25, yaxis="y")
             add_line(fig, d["AlignX"], d["mean"], colors[y], f"{y} 水温", yaxis="y", width=2.4)
- # --- CMEM overlay（主軸y） ---
- if 'cmem_md_stats' in locals() and cmem_md_stats is not None and (not cmem_md_stats.empty):
-     add_band(fig, cmem_md_stats["AlignX"], cmem_md_stats["min"], cmem_md_stats["max"], "#1976d2", alpha=0.10, yaxis="y")
-     add_line(fig, cmem_md_stats["AlignX"], cmem_md_stats["mean"], "#1976d2", "CMEM 平均(モデル)", yaxis="y", width=1.4, dash="dot", alpha=0.65)
+        # --- CMEM overlay（主軸y） ---
+        if 'cmem_md_stats' in locals() and cmem_md_stats is not None and (not cmem_md_stats.empty):
+            add_band(fig, cmem_md_stats["AlignX"], cmem_md_stats["min"], cmem_md_stats["max"], "#1976d2", alpha=0.10, yaxis="y")
+            add_line(fig, cmem_md_stats["AlignX"], cmem_md_stats["mean"], "#1976d2", "CMEM 平均(モデル)", yaxis="y", width=1.4, dash="dot", alpha=0.65)
 
- if md_sec is not None:
+        if md_sec is not None:
             for y in selected_years:
                 d2 = md_sec[md_sec["Year"] == y]
                 if d2.empty:
