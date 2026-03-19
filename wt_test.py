@@ -31,7 +31,7 @@ METRIC = "depth_avg"  # 水温（1–3m平均）
 HOT_RED = "#d32f2f"
 
 # =====================================================
-# 波浪側：固定設定
+# 波浪側：固定設定（スコア等はUIで変更させない）
 # =====================================================
 # ★点ncなので位置指定は不要（旧POINT_*は廃止）
 POINT_MY = None
@@ -206,26 +206,6 @@ def load_raw(csv_path: Path, _hash_val: str):
     df["Month"] = df[DATE_COL].dt.month
     df["Day"] = df[DATE_COL].dt.day
     return df
-
-
-# =====================================================
-# CMEM θo 読み込み（追加）
-# =====================================================
-@st.cache_data(show_spinner=False, ttl=600)
-def load_cmem_thetao(csv_path: Path):
-    if not csv_path.exists():
-        return None
-
-    df = pd.read_csv(csv_path)
-    df["Date"] = pd.to_datetime(df["Date"], utc=True).dt.tz_convert("Asia/Tokyo")
-
-    cmem = (
-        df.groupby("Date")["Temp"]
-        .agg(["mean", "min", "max"])
-        .reset_index()
-        .rename(columns={"Date": "X"})
-    )
-    return cmem
 
 # =====================================================
 # 波浪：共通関数
@@ -482,20 +462,19 @@ def plot_wave(daily: pd.DataFrame, title: str):
         legend=dict(orientation="h", yanchor="top", y=-0.22, xanchor="left", x=0),
     )
     return fig
-
 # =====================================================
-# 起動：水温データ
+# 起動：水温CSVの読み込み
 # =====================================================
 df_raw = None
 years = []
+CURRENT_YEAR = None
 
 if CSV_PATH.exists():
-    b = CSV_PATH.read_bytes()
-    fhash = f"{hashlib.sha1(b).hexdigest()}_{len(b)}"
-    df_raw = load_raw(CSV_PATH, fhash)
+    csv_bytes = CSV_PATH.read_bytes()
+    file_hash = f"{hashlib.sha1(csv_bytes).hexdigest()}_{len(csv_bytes)}"
+    df_raw = load_raw(CSV_PATH, file_hash)
     years = sorted(df_raw["Year"].dropna().unique().tolist())
-
-cmem_raw = load_cmem_thetao(CMEM_CSV_PATH)
+    CURRENT_YEAR = max(years) if years else None
 
 # =====================================================
 # UI：モード
@@ -631,7 +610,7 @@ elif mode == "うねり":
         st.error("選択した期間がデータ範囲外です。開始日・終了日を見直してください。")
         st.stop()
 
-    if (fn is not None) and (not Path(fn).exists()):
+    if not Path(fn).exists():
         st.error("ファイルがありません（data/ に .nc を置いてください）")
         st.stop()
 
@@ -743,89 +722,149 @@ elif mode == "うねり":
             "text/csv",
         )
 
-
 # =====================================================
 # モード：グラフ（水温）
 # =====================================================
 else:
     if df_raw is None:
+        st.error(f"CSV が見つかりません: {CSV_PATH}（repoの data/ に置いてください）")
         st.stop()
 
-    c0, c1, c2 = st.columns([1.1, 1.2, 3.0])
+    c0, c1, c3 = st.columns([1.0, 1.1, 3.0])
 
     with c0:
-        agg_label = pill_toggle(["日時", "日平均"], "日時", "agg_label")
-    with c2:
-        selected_years = st.multiselect(
-            "年", years,
-            default=years[-2:] if len(years) >= 2 else years
-        )
+        sec_label = pill_toggle(["なし", "Sal", "DO"], default="なし", key="sec_label", label="副軸")
+    with c1:
+        agg_label = pill_toggle(["日時", "日平均"], default="日時", key="agg_label", label="集計")
+    with c3:
+        selected_years = st.multiselect("年", years, default=years[-2:] if len(years) >= 2 else years)
 
     if not selected_years:
         st.stop()
 
-    agg_mode = "daily" if agg_label == "日平均" else "datetime"
-    colors = year_color_map(selected_years)
+    agg_mode = "datetime" if agg_label == "日時" else "daily"
 
-    def build_stats(df):
-        d = df[["Year", DATE_COL, METRIC]].dropna()
+    colors = year_color_map(selected_years)
+    colors_sec = {y: colors[y] for y in selected_years}
+
+    sec_metric = {"Sal": "Sal(1m)", "DO": "DO(3m)"}.get(sec_label)
+    if sec_metric and sec_metric not in df_raw.columns:
+        st.warning(f"副軸の列が見つかりません: {sec_metric}（副軸はOFFにしました）")
+        sec_metric = None
+        sec_label = "なし"
+
+    def build_timeseries_stats(df, metric=METRIC):
+        d = df[["Year", DATE_COL, metric]].dropna().copy()
+        d["X"] = d[DATE_COL].dt.floor("D") if agg_mode == "daily" else d[DATE_COL]
+        return d.groupby(["Year", "X"])[metric].agg(["mean", "min", "max"]).reset_index()
+
+    def build_same_monthday_stats(df, metric=METRIC):
+        d = df[["Year", DATE_COL, "Month", "Day", metric]].dropna().copy()
+        d = d[~((d["Month"] == 2) & (d["Day"] == 29))]
+        if agg_mode == "daily":
+            d["AlignX"] = pd.to_datetime(dict(year=2001, month=d["Month"], day=d["Day"]))
+        else:
+            t = d[DATE_COL].dt
+            d["AlignX"] = pd.to_datetime(dict(year=2001, month=d["Month"], day=d["Day"], hour=t.hour, minute=t.minute, second=t.second))
+        return d.groupby(["Year", "AlignX"])[metric].agg(["mean", "min", "max"]).reset_index()
+
+    SEC_BIN_HOURS = 3
+
+    def build_timeseries_stats_sec(df, metric, bin_hours=SEC_BIN_HOURS):
+        d = df[["Year", DATE_COL, metric]].dropna().copy()
         if agg_mode == "daily":
             d["X"] = d[DATE_COL].dt.floor("D")
         else:
-            d["X"] = d[DATE_COL]
-        return (
-            d.groupby(["Year", "X"])[METRIC]
-            .agg(["mean", "min", "max"])
-            .reset_index()
-        )
+            d["X"] = d[DATE_COL].dt.floor(f"{bin_hours}H")
+        return d.groupby(["Year", "X"])[metric].agg(["mean", "min", "max"]).reset_index()
 
-    ts_stats = build_stats(df_raw)
-
-    if cmem_raw is not None:
-        cmem = cmem_raw.copy()
+    def build_same_monthday_stats_sec(df, metric, bin_hours=SEC_BIN_HOURS):
+        d = df[["Year", DATE_COL, "Month", "Day", metric]].dropna().copy()
+        d = d[~((d["Month"] == 2) & (d["Day"] == 29))]
         if agg_mode == "daily":
-            cmem["X"] = cmem["X"].dt.floor("D")
-            cmem = (
-                cmem.groupby("X")[["mean", "min", "max"]]
-                .mean()
-                .reset_index()
-            )
+            d["AlignX"] = pd.to_datetime(dict(year=2001, month=d["Month"], day=d["Day"]))
+        else:
+            t = d[DATE_COL].dt
+            h = (t.hour // bin_hours) * bin_hours
+            d["AlignX"] = pd.to_datetime(dict(year=2001, month=d["Month"], day=d["Day"], hour=h, minute=0, second=0))
+        return d.groupby(["Year", "AlignX"])[metric].agg(["mean", "min", "max"]).reset_index()
+
+    ts_stats = build_timeseries_stats(df_raw, METRIC)
+    md_stats = build_same_monthday_stats(df_raw, METRIC)
+
+    if sec_metric:
+        ts_sec = build_timeseries_stats_sec(df_raw, sec_metric)
+        md_sec = build_same_monthday_stats_sec(df_raw, sec_metric)
     else:
-        cmem = None
+        ts_sec = md_sec = None
 
-    fig = go.Figure()
+    tab_ts, tab_md = st.tabs(["時系列", "同月日比較"])
 
-    for y in selected_years:
-        d = ts_stats[ts_stats["Year"] == y]
-        if d.empty:
-            continue
-        add_band(fig, d["X"], d["min"], d["max"], colors[y], alpha=0.25)
-        add_line(fig, d["X"], d["mean"], colors[y], f"{y} 観測水温")
+    legend_cfg = dict(orientation="h", yanchor="top", y=-0.22, xanchor="left", x=0)
 
-    # === CMEM：薄い帯でオーバーレイ（線なし）===
-    if cmem is not None:
-        add_band(
-            fig,
-            cmem["X"],
-            cmem["min"],
-            cmem["max"],
-            CMEM_COLOR,
-            alpha=CMEM_ALPHA
+    with tab_ts:
+        fig = go.Figure()
+        for y in selected_years:
+            d = ts_stats[ts_stats["Year"] == y]
+            if d.empty:
+                continue
+            add_band(fig, d["X"], d["min"], d["max"], colors[y], alpha=0.25, yaxis="y")
+            add_line(fig, d["X"], d["mean"], colors[y], f"{y} 水温", yaxis="y", width=2.4)
+
+        if ts_sec is not None:
+            for y in selected_years:
+                d2 = ts_sec[ts_sec["Year"] == y]
+                if d2.empty:
+                    continue
+                add_band(fig, d2["X"], d2["min"], d2["max"], colors_sec[y], alpha=0.12, yaxis="y2")
+                add_line(fig, d2["X"], d2["mean"], colors_sec[y], f"{y} {sec_label}",
+                         yaxis="y2", width=1.5, dash="dash", alpha=0.55)
+
+        layout = dict(
+            template="plotly_white",
+            height=520,
+            hovermode="x unified",
+            legend=legend_cfg,
+            margin=dict(l=40, r=30, t=40, b=90),
         )
+        if ts_sec is not None:
+            layout.update(dict(
+                yaxis=dict(title="水温 (℃)"),
+                yaxis2=dict(title="Sal" if sec_label == "Sal" else "DO", overlaying="y", side="right", showgrid=False),
+            ))
+        fig.update_layout(**layout)
+        st.plotly_chart(fig, use_container_width=True)
 
-    fig.update_layout(
-        template="plotly_white",
-        height=520,
-        hovermode="x unified",
-        yaxis=dict(title="水温 (℃)"),
-        legend=dict(
-            orientation="h",
-            yanchor="top",
-            y=-0.22,
-            xanchor="left",
-            x=0
-        ),
-        margin=dict(l=40, r=30, t=40, b=90),
-    )
+    with tab_md:
+        fig = go.Figure()
+        for y in selected_years:
+            d = md_stats[md_stats["Year"] == y]
+            if d.empty:
+                continue
+            add_band(fig, d["AlignX"], d["min"], d["max"], colors[y], alpha=0.25, yaxis="y")
+            add_line(fig, d["AlignX"], d["mean"], colors[y], f"{y} 水温", yaxis="y", width=2.4)
 
-    st.plotly_chart(fig, use_container_width=True)
+        if md_sec is not None:
+            for y in selected_years:
+                d2 = md_sec[md_sec["Year"] == y]
+                if d2.empty:
+                    continue
+                add_band(fig, d2["AlignX"], d2["min"], d2["max"], colors_sec[y], alpha=0.12, yaxis="y2")
+                add_line(fig, d2["AlignX"], d2["mean"], colors_sec[y], f"{y} {sec_label}",
+                         yaxis="y2", width=1.5, dash="dash", alpha=0.55)
+
+        layout = dict(
+            template="plotly_white",
+            height=520,
+            hovermode="x unified",
+            legend=legend_cfg,
+            margin=dict(l=40, r=30, t=40, b=90),
+        )
+        if md_sec is not None:
+            layout.update(dict(
+                yaxis=dict(title="水温 (℃)"),
+                yaxis2=dict(title="Sal" if sec_label == "Sal" else "DO", overlaying="y", side="right", showgrid=False),
+            ))
+        fig.update_layout(**layout)
+        fig.update_xaxes(tickformat="%m/%d")
+        st.plotly_chart(fig, use_container_width=True)
