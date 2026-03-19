@@ -56,6 +56,12 @@ ALLOW_180_FLIP = True
 Q_LOW, Q_HIGH = 0.05, 0.95
 SMOOTH_DAYS = 3
 
+# --- 追加（A+B）: スコア強調パラメータ ---
+DIR_EXP_Q = 0.60        # A: 方向の指数（<1 で頭打ち緩和、0.5〜0.8推奨）
+EXCESS_AH = 0.80        # B: 波高の超過分ブースト係数
+EXCESS_AT = 0.50        # B: 周期の超過分ブースト係数
+EXCESS_P  = 1.20        # B: 超過分の非線形（1.0〜1.5推奨）
+
 # コメント警報（固定）
 ALERT_SCORE = 0.4
 ALERT_DAYS = 4
@@ -377,7 +383,19 @@ def load_wave_daily(fn: str, point_latlon, date_range, ref_quantiles=None):
     else:
         daily["D_idx"] = D1
 
-    daily["score"] = daily["H_idx"] * daily["T_idx"] * daily["D_idx"]
+
+    # --- A) 方向は活かすが、頭打ちを緩める（単調性は維持） ---
+    d_eff = np.clip(daily["D_idx"].astype(float), 0, 1) ** DIR_EXP_Q
+    score_base = daily["H_idx"].astype(float) * daily["T_idx"].astype(float) * d_eff
+
+    # --- B) p95超の"超過分"を危険度へ戻す（越波級を強調） ---
+    denH = max(H_hi - H_lo, 1e-12)
+    denT = max(T_hi - T_lo, 1e-12)
+    H_excess = np.clip((daily["Hmax"].astype(float) - H_hi) / denH, 0, None)
+    T_excess = np.clip((daily["Tp_mean"].astype(float) - T_hi) / denT, 0, None)
+    boost = 1.0 + EXCESS_AH * (H_excess ** EXCESS_P) + EXCESS_AT * (T_excess ** EXCESS_P)
+
+    daily["score"] = np.clip(score_base * boost, 0, 1)
 
     if SMOOTH_DAYS and SMOOTH_DAYS > 1:
         daily["score_map"] = daily["score"].rolling(SMOOTH_DAYS, center=True, min_periods=1).mean()
@@ -434,13 +452,23 @@ def classify_alerts(daily: pd.DataFrame):
     )
     return status, msg, {"duration_days": int(dur), "peak_score": peak_score}
 
+
 def plot_wave(daily: pd.DataFrame, title: str):
     d = daily.sort_index().copy()
-
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=d.index, y=d["score"], mode="lines+markers", name="スコア", line=dict(width=2)))
-    fig.add_trace(go.Scatter(x=d.index, y=d["Hmax"], mode="lines", name="波高(m)", yaxis="y2",
-                             line=dict(width=2, dash="dot")))
+    if "kind" in d.columns:
+        for k, g in d.groupby("kind"):
+            fig.add_trace(go.Scatter(x=g.index, y=g["score"], mode="lines+markers",
+                                     name=f"スコア({k})", line=dict(width=2)))
+            fig.add_trace(go.Scatter(x=g.index, y=g["Hmax"], mode="lines",
+                                     name=f"波高(m)({k})", yaxis="y2",
+                                     line=dict(width=2, dash="dot")))
+    else:
+        fig.add_trace(go.Scatter(x=d.index, y=d["score"], mode="lines+markers",
+                                 name="スコア", line=dict(width=2)))
+        fig.add_trace(go.Scatter(x=d.index, y=d["Hmax"], mode="lines",
+                                 name="波高(m)", yaxis="y2",
+                                 line=dict(width=2, dash="dot")))
 
     fig.update_layout(
         template="plotly_white",
@@ -581,11 +609,14 @@ elif mode == "うねり":
     else:
         hit_anfc = False
 
-    if hit_my and hit_anfc:
-        st.error("選択した期間が MY と ANFC をまたいでいます。どちらか片方の期間にしてください。")
-        st.stop()
 
-    if hit_anfc:
+    if hit_my and hit_anfc:
+        use_kind = "BOTH"
+        # MY と ANFC をまたぐ場合は後段で両方読み込んで結合する
+        fn = None
+        point = None
+        avail = None
+    elif hit_anfc:
         use_kind = "ANFC"
         fn = str(FN_ANFC)
         point = POINT_ANFC  # None
@@ -599,45 +630,41 @@ elif mode == "うねり":
         st.error("選択した期間がデータ範囲外です。開始日・終了日を見直してください。")
         st.stop()
 
-    if not Path(fn).exists():
+    if (fn is not None) and (not Path(fn).exists()):
         st.error("ファイルがありません（data/ に .nc を置いてください）")
         st.stop()
 
-    # データ範囲に合わせてクランプ
-    if avail is not None:
+
+    # データ範囲に合わせてクランプ（BOTH の場合は各系列で個別にクランプ）
+    if (use_kind != "BOTH") and (avail is not None):
         s_clamp = max(start_ts, avail[0].normalize())
         e_clamp = min(end_ts, avail[1].normalize())
         if (s_clamp != start_ts) or (e_clamp != end_ts):
             st.info(f"期間をデータ範囲に合わせて補正しました：{s_clamp.date()} – {e_clamp.date()}")
-        start_ts, end_ts = s_clamp, e_clamp
+            start_ts, end_ts = s_clamp, e_clamp
 
     with st.spinner("波浪を計算中..."):
-        # --- 参照（正規化）基準の作り方だけを ANFC 時に変更する ---
-        if use_kind == "ANFC" and (my_range is not None) and FN_MY.exists() and (anfc_range is not None) and     FN_ANFC.exists():
-            # MY + ANFC の全期間を参照系列として結合（分位点の安定化）
+
+        # --- 参照（正規化）基準：MY+ANFC が揃う場合は全期間で共通化（比較のため） ---
+        daily_ref = None
+        if (my_range is not None) and FN_MY.exists() and (anfc_range is not None) and FN_ANFC.exists():
             my_s = my_range[0].normalize()
             my_e = my_range[1].normalize()
             an_s = anfc_range[0].normalize()
             an_e = anfc_range[1].normalize()
-
-            daily_my, _ = load_wave_daily(
-                str(FN_MY), POINT_MY,
-                (my_s.strftime("%Y-%m-%d"), my_e.strftime("%Y-%m-%d"))
-            )
-            daily_an, _ = load_wave_daily(
-                str(FN_ANFC), POINT_ANFC,
-                (an_s.strftime("%Y-%m-%d"), an_e.strftime("%Y-%m-%d"))
-            )
-
-            daily_ref = pd.concat([daily_my, daily_an], axis=0).sort_index()
+            daily_my_ref, _ = load_wave_daily(str(FN_MY), POINT_MY, (my_s.strftime("%Y-%m-%d"), my_e.strftime("%Y-%m-%d")))
+            daily_an_ref, _ = load_wave_daily(str(FN_ANFC), POINT_ANFC, (an_s.strftime("%Y-%m-%d"), an_e.strftime("%Y-%m-%d")))
+            daily_ref = pd.concat([daily_my_ref, daily_an_ref], axis=0).sort_index()
         else:
-            # 従来どおり：選択したファイルの全期間を参照にする
-            ref_s = avail[0].normalize()
-            ref_e = avail[1].normalize()
-            daily_ref, _ = load_wave_daily(
-                fn, point,
-                (ref_s.strftime("%Y-%m-%d"), ref_e.strftime("%Y-%m-%d"))
-            )
+            # フォールバック：選択した系列の全期間を参照にする
+            if use_kind == "ANFC":
+                ref_s = anfc_range[0].normalize()
+                ref_e = anfc_range[1].normalize()
+                daily_ref, _ = load_wave_daily(str(FN_ANFC), POINT_ANFC, (ref_s.strftime("%Y-%m-%d"), ref_e.strftime("%Y-%m-%d")))
+            else:
+                ref_s = my_range[0].normalize()
+                ref_e = my_range[1].normalize()
+                daily_ref, _ = load_wave_daily(str(FN_MY), POINT_MY, (ref_s.strftime("%Y-%m-%d"), ref_e.strftime("%Y-%m-%d")))
 
         if daily_ref is None or daily_ref.empty:
             daily = daily_ref
@@ -646,12 +673,42 @@ elif mode == "うねり":
             T_lo, T_hi = calc_lohi(daily_ref["Tp_mean"], Q_LOW, Q_HIGH)
             ref_q = (H_lo, H_hi, T_lo, T_hi)
 
-            daily, _ = load_wave_daily(
-                fn, point,
-                (start_ts.strftime("%Y-%m-%d"), end_ts.strftime("%Y-%m-%d")),
-                ref_quantiles=ref_q
-            )
+            if use_kind == "MY":
+                daily, _ = load_wave_daily(str(FN_MY), POINT_MY,
+                                           (start_ts.strftime("%Y-%m-%d"), end_ts.strftime("%Y-%m-%d")),
+                                           ref_quantiles=ref_q)
+                if daily is not None and not daily.empty:
+                    daily["kind"] = "MY"
 
+            elif use_kind == "ANFC":
+                daily, _ = load_wave_daily(str(FN_ANFC), POINT_ANFC,
+                                           (start_ts.strftime("%Y-%m-%d"), end_ts.strftime("%Y-%m-%d")),
+                                           ref_quantiles=ref_q)
+                if daily is not None and not daily.empty:
+                    daily["kind"] = "ANFC"
+
+            else:  # BOTH
+                # MY 区間
+                s_my = start_ts
+                e_my = min(end_ts, my_range[1].normalize())
+                daily_my, _ = load_wave_daily(str(FN_MY), POINT_MY,
+                                              (s_my.strftime("%Y-%m-%d"), e_my.strftime("%Y-%m-%d")),
+                                              ref_quantiles=ref_q)
+                if daily_my is not None and not daily_my.empty:
+                    daily_my["kind"] = "MY"
+
+                # ANFC 区間
+                s_an = max(start_ts, anfc_range[0].normalize())
+                e_an = end_ts
+                daily_an, _ = load_wave_daily(str(FN_ANFC), POINT_ANFC,
+                                              (s_an.strftime("%Y-%m-%d"), e_an.strftime("%Y-%m-%d")),
+                                              ref_quantiles=ref_q)
+                if daily_an is not None and not daily_an.empty:
+                    daily_an["kind"] = "ANFC"
+
+                daily = pd.concat([daily_my, daily_an], axis=0).sort_index()
+                if daily is not None and not daily.empty:
+                    daily = daily[~daily.index.duplicated(keep="last")]
     status, msg, _ = classify_alerts(daily)
     if status == "ALERT":
         st.error(msg)
@@ -663,7 +720,7 @@ elif mode == "うねり":
         st.info(msg)
 
     if daily is not None and not daily.empty:
-        st.plotly_chart(plot_wave(daily, f"期間推移（{use_kind}）"), use_container_width=True)
+        st.plotly_chart(plot_wave(daily, f"期間推移（{use_kind}）" if use_kind != "BOTH" else "期間推移（MY+ANFC）"), use_container_width=True)
 
         cols = [c for c in ["score", "Hmax", "Tp_mean", "Dir_mean", "H_idx", "T_idx", "D_idx"] if c in daily.columns]
         dshow = daily.sort_index().tail(RECENT_DAYS_TABLE)[cols].copy()
@@ -681,7 +738,7 @@ elif mode == "うねり":
         st.download_button(
             f"{use_kind} daily CSV",
             daily.to_csv(index=True).encode("utf-8"),
-            f"{use_kind.lower()}_daily.csv",
+            (("my_anfc_daily.csv") if use_kind=="BOTH" else f"{use_kind.lower()}_daily.csv"),
             "text/csv",
         )
 
