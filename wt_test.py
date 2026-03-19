@@ -579,26 +579,26 @@ elif mode == "うねり":
     else:
         hit_anfc = False
 
+    
     if hit_my and hit_anfc:
-    use_kind = "BOTH"
-    if use_kind == "BOTH":
-    # MY と ANFC をまたぐ場合は後段で両方読み込んで結合する
-    fn = None
-    point = None
-    avail = None
-elif hit_anfc:
-    use_kind = "ANFC"
-    fn = str(FN_ANFC)
-    point = POINT_ANFC  # None
-    avail = anfc_range
-elif hit_my:
-    use_kind = "MY"
-    fn = str(FN_MY)
-    point = POINT_MY  # None
-    avail = my_range
-else:
-    st.error("選択した期間がデータ範囲外です。開始日・終了日を見直してください。")
-    st.stop()
+        use_kind = "BOTH"
+        # MY と ANFC をまたぐ場合は後段で両方読み込んで結合する
+        fn = None
+        point = None
+        avail = None
+    elif hit_anfc:
+        use_kind = "ANFC"
+        fn = str(FN_ANFC)
+        point = POINT_ANFC  # None
+        avail = anfc_range
+    elif hit_my:
+        use_kind = "MY"
+        fn = str(FN_MY)
+        point = POINT_MY  # None
+        avail = my_range
+    else:
+        st.error("選択した期間がデータ範囲外です。開始日・終了日を見直してください。")
+        st.stop()
     if not Path(fn).exists():
         st.error("ファイルがありません（data/ に .nc を置いてください）")
         st.stop()
