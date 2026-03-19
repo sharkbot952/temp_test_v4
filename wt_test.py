@@ -17,6 +17,7 @@ st.set_page_config(page_title="", layout="wide")
 APP_DIR = Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"
 CSV_PATH = DATA_DIR / "Taiki_temp.csv"
+CMEM_THETAO_CSV_PATH = DATA_DIR / "cmem_thetao.csv"
 
 # ★点切り抜き済みWAV（位置は確定済みなのでPOINTは不要）
 FN_MY   = DATA_DIR / "cmem_wav_MY.nc"
@@ -54,13 +55,6 @@ ALLOW_180_FLIP = True
 # 合成スコア（固定）
 Q_LOW, Q_HIGH = 0.05, 0.95
 SMOOTH_DAYS = 3
-
-# --- 追加（A+B）: スコア強調パラメータ ---
-DIR_EXP_Q = 0.60        # A: 方向の指数（<1 で頭打ち緩和、0.5〜0.8推奨）
-EXCESS_AH = 0.80        # B: 波高の超過分ブースト係数
-EXCESS_AT = 0.50        # B: 周期の超過分ブースト係数
-EXCESS_P  = 1.20        # B: 超過分の非線形（1.0〜1.5推奨）
-
 
 # コメント警報（固定）
 ALERT_SCORE = 0.4
@@ -205,6 +199,25 @@ def load_raw(csv_path: Path, _hash_val: str):
     df["Year"] = df[DATE_COL].dt.year
     df["Month"] = df[DATE_COL].dt.month
     df["Day"] = df[DATE_COL].dt.day
+    return df
+
+
+# =====================================================
+# CMEM（モデル水温）：データ読み込み（UTC→JST）
+# =====================================================
+@st.cache_data(show_spinner="CMEMデータ読み込み中...", ttl=600)
+def load_cmem_thetao(csv_path: Path, _hash_val: str):
+    """cmem_thetao.csv を読み込み、UTC→JSTへ変換した Date_JST を付与する。
+    期待列: Date, Depth, Temp（DateはUTCのISO/tz付き）
+    """
+    df = pd.read_csv(str(csv_path))
+    if 'Date' not in df.columns or 'Temp' not in df.columns:
+        return pd.DataFrame(columns=['Date', 'Date_JST', 'Depth', 'Temp'])
+    df['Date'] = pd.to_datetime(df['Date'], errors='coerce', utc=True)
+    df = df.dropna(subset=['Date']).copy()
+    df['Date_JST'] = df['Date'] + pd.Timedelta(hours=9)
+    if 'Depth' not in df.columns:
+        df['Depth'] = np.nan
     return df
 
 # =====================================================
@@ -364,19 +377,7 @@ def load_wave_daily(fn: str, point_latlon, date_range, ref_quantiles=None):
     else:
         daily["D_idx"] = D1
 
-
-    # --- A) 方向は活かすが、頭打ちを緩める（単調性は維持） ---
-    d_eff = np.clip(daily["D_idx"].astype(float), 0, 1) ** DIR_EXP_Q
-    score_base = daily["H_idx"].astype(float) * daily["T_idx"].astype(float) * d_eff
-
-    # --- B) p95超の"超過分"を危険度へ戻す（越波級を強調） ---
-    denH = max(H_hi - H_lo, 1e-12)
-    denT = max(T_hi - T_lo, 1e-12)
-    H_excess = np.clip((daily["Hmax"].astype(float) - H_hi) / denH, 0, None)
-    T_excess = np.clip((daily["Tp_mean"].astype(float) - T_hi) / denT, 0, None)
-    boost = 1.0 + EXCESS_AH * (H_excess ** EXCESS_P) + EXCESS_AT * (T_excess ** EXCESS_P)
-
-    daily["score"] = np.clip(score_base * boost, 0, 1)
+    daily["score"] = daily["H_idx"] * daily["T_idx"] * daily["D_idx"]
 
     if SMOOTH_DAYS and SMOOTH_DAYS > 1:
         daily["score_map"] = daily["score"].rolling(SMOOTH_DAYS, center=True, min_periods=1).mean()
@@ -433,23 +434,13 @@ def classify_alerts(daily: pd.DataFrame):
     )
     return status, msg, {"duration_days": int(dur), "peak_score": peak_score}
 
-
 def plot_wave(daily: pd.DataFrame, title: str):
     d = daily.sort_index().copy()
+
     fig = go.Figure()
-    if "kind" in d.columns:
-        for k, g in d.groupby("kind"):
-            fig.add_trace(go.Scatter(x=g.index, y=g["score"], mode="lines+markers",
-                                     name=f"スコア({k})", line=dict(width=2)))
-            fig.add_trace(go.Scatter(x=g.index, y=g["Hmax"], mode="lines",
-                                     name=f"波高(m)({k})", yaxis="y2",
-                                     line=dict(width=2, dash="dot")))
-    else:
-        fig.add_trace(go.Scatter(x=d.index, y=d["score"], mode="lines+markers",
-                                 name="スコア", line=dict(width=2)))
-        fig.add_trace(go.Scatter(x=d.index, y=d["Hmax"], mode="lines",
-                                 name="波高(m)", yaxis="y2",
-                                 line=dict(width=2, dash="dot")))
+    fig.add_trace(go.Scatter(x=d.index, y=d["score"], mode="lines+markers", name="スコア", line=dict(width=2)))
+    fig.add_trace(go.Scatter(x=d.index, y=d["Hmax"], mode="lines", name="波高(m)", yaxis="y2",
+                             line=dict(width=2, dash="dot")))
 
     fig.update_layout(
         template="plotly_white",
@@ -462,6 +453,7 @@ def plot_wave(daily: pd.DataFrame, title: str):
         legend=dict(orientation="h", yanchor="top", y=-0.22, xanchor="left", x=0),
     )
     return fig
+
 # =====================================================
 # 起動：水温CSVの読み込み
 # =====================================================
@@ -589,14 +581,11 @@ elif mode == "うねり":
     else:
         hit_anfc = False
 
-
     if hit_my and hit_anfc:
-        use_kind = "BOTH"
-        # MY と ANFC をまたぐ場合は後段で両方読み込んで結合する
-        fn = None
-        point = None
-        avail = None
-    elif hit_anfc:
+        st.error("選択した期間が MY と ANFC をまたいでいます。どちらか片方の期間にしてください。")
+        st.stop()
+
+    if hit_anfc:
         use_kind = "ANFC"
         fn = str(FN_ANFC)
         point = POINT_ANFC  # None
@@ -610,41 +599,45 @@ elif mode == "うねり":
         st.error("選択した期間がデータ範囲外です。開始日・終了日を見直してください。")
         st.stop()
 
-    if (fn is not None) and (not Path(fn).exists()):
+    if not Path(fn).exists():
         st.error("ファイルがありません（data/ に .nc を置いてください）")
         st.stop()
 
-
-    # データ範囲に合わせてクランプ（BOTH の場合は各系列で個別にクランプ）
-    if (use_kind != "BOTH") and (avail is not None):
+    # データ範囲に合わせてクランプ
+    if avail is not None:
         s_clamp = max(start_ts, avail[0].normalize())
         e_clamp = min(end_ts, avail[1].normalize())
         if (s_clamp != start_ts) or (e_clamp != end_ts):
             st.info(f"期間をデータ範囲に合わせて補正しました：{s_clamp.date()} – {e_clamp.date()}")
-            start_ts, end_ts = s_clamp, e_clamp
+        start_ts, end_ts = s_clamp, e_clamp
 
     with st.spinner("波浪を計算中..."):
-
-        # --- 参照（正規化）基準：MY+ANFC が揃う場合は全期間で共通化（比較のため） ---
-        daily_ref = None
-        if (my_range is not None) and FN_MY.exists() and (anfc_range is not None) and FN_ANFC.exists():
+        # --- 参照（正規化）基準の作り方だけを ANFC 時に変更する ---
+        if use_kind == "ANFC" and (my_range is not None) and FN_MY.exists() and (anfc_range is not None) and     FN_ANFC.exists():
+            # MY + ANFC の全期間を参照系列として結合（分位点の安定化）
             my_s = my_range[0].normalize()
             my_e = my_range[1].normalize()
             an_s = anfc_range[0].normalize()
             an_e = anfc_range[1].normalize()
-            daily_my_ref, _ = load_wave_daily(str(FN_MY), POINT_MY, (my_s.strftime("%Y-%m-%d"), my_e.strftime("%Y-%m-%d")))
-            daily_an_ref, _ = load_wave_daily(str(FN_ANFC), POINT_ANFC, (an_s.strftime("%Y-%m-%d"), an_e.strftime("%Y-%m-%d")))
-            daily_ref = pd.concat([daily_my_ref, daily_an_ref], axis=0).sort_index()
+
+            daily_my, _ = load_wave_daily(
+                str(FN_MY), POINT_MY,
+                (my_s.strftime("%Y-%m-%d"), my_e.strftime("%Y-%m-%d"))
+            )
+            daily_an, _ = load_wave_daily(
+                str(FN_ANFC), POINT_ANFC,
+                (an_s.strftime("%Y-%m-%d"), an_e.strftime("%Y-%m-%d"))
+            )
+
+            daily_ref = pd.concat([daily_my, daily_an], axis=0).sort_index()
         else:
-            # フォールバック：選択した系列の全期間を参照にする
-            if use_kind == "ANFC":
-                ref_s = anfc_range[0].normalize()
-                ref_e = anfc_range[1].normalize()
-                daily_ref, _ = load_wave_daily(str(FN_ANFC), POINT_ANFC, (ref_s.strftime("%Y-%m-%d"), ref_e.strftime("%Y-%m-%d")))
-            else:
-                ref_s = my_range[0].normalize()
-                ref_e = my_range[1].normalize()
-                daily_ref, _ = load_wave_daily(str(FN_MY), POINT_MY, (ref_s.strftime("%Y-%m-%d"), ref_e.strftime("%Y-%m-%d")))
+            # 従来どおり：選択したファイルの全期間を参照にする
+            ref_s = avail[0].normalize()
+            ref_e = avail[1].normalize()
+            daily_ref, _ = load_wave_daily(
+                fn, point,
+                (ref_s.strftime("%Y-%m-%d"), ref_e.strftime("%Y-%m-%d"))
+            )
 
         if daily_ref is None or daily_ref.empty:
             daily = daily_ref
@@ -653,42 +646,12 @@ elif mode == "うねり":
             T_lo, T_hi = calc_lohi(daily_ref["Tp_mean"], Q_LOW, Q_HIGH)
             ref_q = (H_lo, H_hi, T_lo, T_hi)
 
-            if use_kind == "MY":
-                daily, _ = load_wave_daily(str(FN_MY), POINT_MY,
-                                           (start_ts.strftime("%Y-%m-%d"), end_ts.strftime("%Y-%m-%d")),
-                                           ref_quantiles=ref_q)
-                if daily is not None and not daily.empty:
-                    daily["kind"] = "MY"
+            daily, _ = load_wave_daily(
+                fn, point,
+                (start_ts.strftime("%Y-%m-%d"), end_ts.strftime("%Y-%m-%d")),
+                ref_quantiles=ref_q
+            )
 
-            elif use_kind == "ANFC":
-                daily, _ = load_wave_daily(str(FN_ANFC), POINT_ANFC,
-                                           (start_ts.strftime("%Y-%m-%d"), end_ts.strftime("%Y-%m-%d")),
-                                           ref_quantiles=ref_q)
-                if daily is not None and not daily.empty:
-                    daily["kind"] = "ANFC"
-
-            else:  # BOTH
-                # MY 区間
-                s_my = start_ts
-                e_my = min(end_ts, my_range[1].normalize())
-                daily_my, _ = load_wave_daily(str(FN_MY), POINT_MY,
-                                              (s_my.strftime("%Y-%m-%d"), e_my.strftime("%Y-%m-%d")),
-                                              ref_quantiles=ref_q)
-                if daily_my is not None and not daily_my.empty:
-                    daily_my["kind"] = "MY"
-
-                # ANFC 区間
-                s_an = max(start_ts, anfc_range[0].normalize())
-                e_an = end_ts
-                daily_an, _ = load_wave_daily(str(FN_ANFC), POINT_ANFC,
-                                              (s_an.strftime("%Y-%m-%d"), e_an.strftime("%Y-%m-%d")),
-                                              ref_quantiles=ref_q)
-                if daily_an is not None and not daily_an.empty:
-                    daily_an["kind"] = "ANFC"
-
-                daily = pd.concat([daily_my, daily_an], axis=0).sort_index()
-                if daily is not None and not daily.empty:
-                    daily = daily[~daily.index.duplicated(keep="last")]
     status, msg, _ = classify_alerts(daily)
     if status == "ALERT":
         st.error(msg)
@@ -700,7 +663,7 @@ elif mode == "うねり":
         st.info(msg)
 
     if daily is not None and not daily.empty:
-        st.plotly_chart(plot_wave(daily, f"期間推移（{use_kind}）" if use_kind != "BOTH" else "期間推移（MY+ANFC）"), use_container_width=True)
+        st.plotly_chart(plot_wave(daily, f"期間推移（{use_kind}）"), use_container_width=True)
 
         cols = [c for c in ["score", "Hmax", "Tp_mean", "Dir_mean", "H_idx", "T_idx", "D_idx"] if c in daily.columns]
         dshow = daily.sort_index().tail(RECENT_DAYS_TABLE)[cols].copy()
@@ -718,7 +681,7 @@ elif mode == "うねり":
         st.download_button(
             f"{use_kind} daily CSV",
             daily.to_csv(index=True).encode("utf-8"),
-            (("my_anfc_daily.csv") if use_kind=="BOTH" else f"{use_kind.lower()}_daily.csv"),
+            f"{use_kind.lower()}_daily.csv",
             "text/csv",
         )
 
@@ -730,6 +693,13 @@ else:
         st.error(f"CSV が見つかりません: {CSV_PATH}（repoの data/ に置いてください）")
         st.stop()
 
+
+ # --- CMEM（モデル水温）読み込み（存在すれば） ---
+ df_cmem = None
+ if CMEM_THETAO_CSV_PATH.exists():
+     cmem_bytes = CMEM_THETAO_CSV_PATH.read_bytes()
+     cmem_hash = f"{hashlib.sha1(cmem_bytes).hexdigest()}_{len(cmem_bytes)}"
+     df_cmem = load_cmem_thetao(CMEM_THETAO_CSV_PATH, cmem_hash)
     c0, c1, c3 = st.columns([1.0, 1.1, 3.0])
 
     with c0:
@@ -804,14 +774,27 @@ else:
 
     with tab_ts:
         fig = go.Figure()
+ # --- CMEM（モデル水温）：同一Xで min/max の帯を重ねる（主軸ではないため薄く表示）
+ cmem_ts_stats = None
+ if df_cmem is not None and (not df_cmem.empty):
+     dcm = df_cmem[["Date_JST", "Temp"]].dropna().copy()
+     if agg_mode == "daily":
+         dcm["X"] = dcm["Date_JST"].dt.floor("D")
+     else:
+         dcm["X"] = dcm["Date_JST"]
+     cmem_ts_stats = dcm.groupby("X")["Temp"].agg(["mean", "min", "max"]).reset_index()
         for y in selected_years:
             d = ts_stats[ts_stats["Year"] == y]
             if d.empty:
                 continue
             add_band(fig, d["X"], d["min"], d["max"], colors[y], alpha=0.25, yaxis="y")
             add_line(fig, d["X"], d["mean"], colors[y], f"{y} 水温", yaxis="y", width=2.4)
+ # --- CMEM overlay（主軸y） ---
+ if 'cmem_ts_stats' in locals() and cmem_ts_stats is not None and (not cmem_ts_stats.empty):
+     add_band(fig, cmem_ts_stats["X"], cmem_ts_stats["min"], cmem_ts_stats["max"], "#1976d2", alpha=0.10, yaxis="y")
+     add_line(fig, cmem_ts_stats["X"], cmem_ts_stats["mean"], "#1976d2", "CMEM 平均(モデル)", yaxis="y", width=1.4, dash="dot", alpha=0.65)
 
-        if ts_sec is not None:
+ if ts_sec is not None:
             for y in selected_years:
                 d2 = ts_sec[ts_sec["Year"] == y]
                 if d2.empty:
@@ -837,14 +820,31 @@ else:
 
     with tab_md:
         fig = go.Figure()
+ # --- CMEM（モデル水温）：同月日比較用（年=2001へ整列）
+ cmem_md_stats = None
+ if df_cmem is not None and (not df_cmem.empty):
+     dcm = df_cmem[["Date_JST", "Temp"]].dropna().copy()
+     dcm["Month"] = dcm["Date_JST"].dt.month
+     dcm["Day"] = dcm["Date_JST"].dt.day
+     dcm = dcm[~((dcm["Month"] == 2) & (dcm["Day"] == 29))]
+     if agg_mode == "daily":
+         dcm["AlignX"] = pd.to_datetime(dict(year=2001, month=dcm["Month"], day=dcm["Day"]))
+     else:
+         t = dcm["Date_JST"].dt
+         dcm["AlignX"] = pd.to_datetime(dict(year=2001, month=dcm["Month"], day=dcm["Day"], hour=t.hour, minute=t.minute, second=t.second))
+     cmem_md_stats = dcm.groupby("AlignX")["Temp"].agg(["mean", "min", "max"]).reset_index()
         for y in selected_years:
             d = md_stats[md_stats["Year"] == y]
             if d.empty:
                 continue
             add_band(fig, d["AlignX"], d["min"], d["max"], colors[y], alpha=0.25, yaxis="y")
             add_line(fig, d["AlignX"], d["mean"], colors[y], f"{y} 水温", yaxis="y", width=2.4)
+ # --- CMEM overlay（主軸y） ---
+ if 'cmem_md_stats' in locals() and cmem_md_stats is not None and (not cmem_md_stats.empty):
+     add_band(fig, cmem_md_stats["AlignX"], cmem_md_stats["min"], cmem_md_stats["max"], "#1976d2", alpha=0.10, yaxis="y")
+     add_line(fig, cmem_md_stats["AlignX"], cmem_md_stats["mean"], "#1976d2", "CMEM 平均(モデル)", yaxis="y", width=1.4, dash="dot", alpha=0.65)
 
-        if md_sec is not None:
+ if md_sec is not None:
             for y in selected_years:
                 d2 = md_sec[md_sec["Year"] == y]
                 if d2.empty:
