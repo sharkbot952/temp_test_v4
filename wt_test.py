@@ -610,7 +610,7 @@ elif mode == "うねり":
         st.error("選択した期間がデータ範囲外です。開始日・終了日を見直してください。")
         st.stop()
 
-    if not Path(fn).exists():
+    if (fn is not None) and (not Path(fn).exists()):
         st.error("ファイルがありません（data/ に .nc を置いてください）")
         st.stop()
 
