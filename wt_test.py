@@ -55,6 +55,12 @@ ALLOW_180_FLIP = True
 Q_LOW, Q_HIGH = 0.05, 0.95
 SMOOTH_DAYS = 3
 
+# --- 追加（A+B）: スコア強調パラメータ ---
+DIR_EXP_Q = 0.60        # A: 方向の指数（<1 で頭打ち緩和、0.5〜0.8推奨）
+EXCESS_AH = 0.80        # B: 波高の超過分ブースト係数
+EXCESS_AT = 0.50        # B: 周期の超過分ブースト係数
+EXCESS_P  = 1.20        # B: 超過分の非線形（1.0〜1.5推奨）
+
 # コメント警報（固定）
 ALERT_SCORE = 0.4
 ALERT_DAYS = 4
@@ -357,8 +363,18 @@ def load_wave_daily(fn: str, point_latlon, date_range, ref_quantiles=None):
     else:
         daily["D_idx"] = D1
 
-    daily["score"] = daily["H_idx"] * daily["T_idx"] * daily["D_idx"]
+    # --- A) 方向は活かすが、頭打ちを緩める（単調性は維持） ---
+d_eff = np.clip(daily["D_idx"].astype(float), 0, 1) ** DIR_EXP_Q
+score_base = daily["H_idx"].astype(float) * daily["T_idx"].astype(float) * d_eff
 
+# --- B) p95超の"超過分"を危険度へ戻す（越波級を強調） ---
+denH = max(H_hi - H_lo, 1e-12)
+denT = max(T_hi - T_lo, 1e-12)
+H_excess = np.clip((daily["Hmax"].astype(float) - H_hi) / denH, 0, None)
+T_excess = np.clip((daily["Tp_mean"].astype(float) - T_hi) / denT, 0, None)
+boost = 1.0 + EXCESS_AH * (H_excess ** EXCESS_P) + EXCESS_AT * (T_excess ** EXCESS_P)
+
+daily["score"] = np.clip(score_base * boost, 0, 1)
     if SMOOTH_DAYS and SMOOTH_DAYS > 1:
         daily["score_map"] = daily["score"].rolling(SMOOTH_DAYS, center=True, min_periods=1).mean()
     else:
@@ -591,48 +607,48 @@ elif mode == "うねり":
             st.info(f"期間をデータ範囲に合わせて補正しました：{s_clamp.date()} – {e_clamp.date()}")
         start_ts, end_ts = s_clamp, e_clamp
 
-    with st.spinner("波浪を計算中..."):
-        # --- 参照（正規化）基準の作り方だけを ANFC 時に変更する ---
-        if use_kind == "ANFC" and (my_range is not None) and FN_MY.exists() and (anfc_range is not None) and FN_ANFC.exists():
-            # MY + ANFC の全期間を参照系列として結合（分位点の安定化）
-            my_s = my_range[0].normalize()
-            my_e = my_range[1].normalize()
-            an_s = anfc_range[0].normalize()
-            an_e = anfc_range[1].normalize()
+	with st.spinner("波浪を計算中..."):
+	    # --- 参照（正規化）基準の作り方だけを ANFC 時に変更する ---
+	    if use_kind == "ANFC" and (my_range is not None) and FN_MY.exists() and (anfc_range is not None) and 	FN_ANFC.exists():
+	        # MY + ANFC の全期間を参照系列として結合（分位点の安定化）
+	        my_s = my_range[0].normalize()
+	        my_e = my_range[1].normalize()
+	        an_s = anfc_range[0].normalize()
+	        an_e = anfc_range[1].normalize()
 
-            daily_my, _ = load_wave_daily(
-                str(FN_MY), POINT_MY,
-                (my_s.strftime("%Y-%m-%d"), my_e.strftime("%Y-%m-%d"))
-            )
-            daily_an, _ = load_wave_daily(
-                str(FN_ANFC), POINT_ANFC,
-                (an_s.strftime("%Y-%m-%d"), an_e.strftime("%Y-%m-%d"))
-            )
+	        daily_my, _ = load_wave_daily(
+	            str(FN_MY), POINT_MY,
+	            (my_s.strftime("%Y-%m-%d"), my_e.strftime("%Y-%m-%d"))
+	        )
+	        daily_an, _ = load_wave_daily(
+	            str(FN_ANFC), POINT_ANFC,
+	            (an_s.strftime("%Y-%m-%d"), an_e.strftime("%Y-%m-%d"))
+	        )
 
-            daily_ref = pd.concat([daily_my, daily_an], axis=0).sort_index()
-        else:
-            # 従来どおり：選択したファイルの全期間を参照にする
-            ref_s = avail[0].normalize()
-            ref_e = avail[1].normalize()
-            daily_ref, _ = load_wave_daily(
-                fn, point,
-                (ref_s.strftime("%Y-%m-%d"), ref_e.strftime("%Y-%m-%d"))
-            )
+	        daily_ref = pd.concat([daily_my, daily_an], axis=0).sort_index()
+	    else:
+	        # 従来どおり：選択したファイルの全期間を参照にする
+	        ref_s = avail[0].normalize()
+	        ref_e = avail[1].normalize()
+	        daily_ref, _ = load_wave_daily(
+	            fn, point,
+	            (ref_s.strftime("%Y-%m-%d"), ref_e.strftime("%Y-%m-%d"))
+	        )
 
-        if daily_ref is None or daily_ref.empty:
-            daily = daily_ref
-        else:
-            H_lo, H_hi = calc_lohi(daily_ref["Hmax"], Q_LOW, Q_HIGH)
-            T_lo, T_hi = calc_lohi(daily_ref["Tp_mean"], Q_LOW, Q_HIGH)
-            ref_q = (H_lo, H_hi, T_lo, T_hi)
+	    if daily_ref is None or daily_ref.empty:
+	        daily = daily_ref
+	    else:
+	        H_lo, H_hi = calc_lohi(daily_ref["Hmax"], Q_LOW, Q_HIGH)
+	        T_lo, T_hi = calc_lohi(daily_ref["Tp_mean"], Q_LOW, Q_HIGH)
+	        ref_q = (H_lo, H_hi, T_lo, T_hi)
 
-            daily, _ = load_wave_daily(
-                fn, point,
-                (start_ts.strftime("%Y-%m-%d"), end_ts.strftime("%Y-%m-%d")),
-                ref_quantiles=ref_q
-            )
+	        daily, _ = load_wave_daily(
+	            fn, point,
+	            (start_ts.strftime("%Y-%m-%d"), end_ts.strftime("%Y-%m-%d")),
+	            ref_quantiles=ref_q
+	        )
 
-        status, msg, _ = classify_alerts(daily)
+    status, msg, _ = classify_alerts(daily)
     if status == "ALERT":
         st.error(msg)
     elif status == "WATCH":
