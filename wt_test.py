@@ -364,17 +364,17 @@ def load_wave_daily(fn: str, point_latlon, date_range, ref_quantiles=None):
         daily["D_idx"] = D1
 
     # --- A) 方向は活かすが、頭打ちを緩める（単調性は維持） ---
-d_eff = np.clip(daily["D_idx"].astype(float), 0, 1) ** DIR_EXP_Q
-score_base = daily["H_idx"].astype(float) * daily["T_idx"].astype(float) * d_eff
+    d_eff = np.clip(daily["D_idx"].astype(float), 0, 1) ** DIR_EXP_Q
+    score_base = daily["H_idx"].astype(float) * daily["T_idx"].astype(float) * d_eff
 
-# --- B) p95超の"超過分"を危険度へ戻す（越波級を強調） ---
-denH = max(H_hi - H_lo, 1e-12)
-denT = max(T_hi - T_lo, 1e-12)
-H_excess = np.clip((daily["Hmax"].astype(float) - H_hi) / denH, 0, None)
-T_excess = np.clip((daily["Tp_mean"].astype(float) - T_hi) / denT, 0, None)
-boost = 1.0 + EXCESS_AH * (H_excess ** EXCESS_P) + EXCESS_AT * (T_excess ** EXCESS_P)
+    # --- B) p95超の"超過分"を危険度へ戻す（越波級を強調） ---
+    denH = max(H_hi - H_lo, 1e-12)
+    denT = max(T_hi - T_lo, 1e-12)
+    H_excess = np.clip((daily["Hmax"].astype(float) - H_hi) / denH, 0, None)
+    T_excess = np.clip((daily["Tp_mean"].astype(float) - T_hi) / denT, 0, None)
+    boost = 1.0 + EXCESS_AH * (H_excess ** EXCESS_P) + EXCESS_AT * (T_excess ** EXCESS_P)
 
-daily["score"] = np.clip(score_base * boost, 0, 1)
+    daily["score"] = np.clip(score_base * boost, 0, 1)
     if SMOOTH_DAYS and SMOOTH_DAYS > 1:
         daily["score_map"] = daily["score"].rolling(SMOOTH_DAYS, center=True, min_periods=1).mean()
     else:
