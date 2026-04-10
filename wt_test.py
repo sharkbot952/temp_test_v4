@@ -573,7 +573,7 @@ elif mode == "うねり":
 
     if anfc_range is not None:
         end_def = anfc_range[1].normalize()
-        start_def = (end_def - pd.Timedelta(days=21)).normalize()
+        start_def = (end_def - pd.Timedelta(days=10)).normalize()
         if start_def < anfc_range[0].normalize():
             start_def = anfc_range[0].normalize()
     elif my_range is not None:
