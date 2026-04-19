@@ -802,7 +802,10 @@ else:
         if agg_mode == "daily":
             d["X"] = d[DATE_COL].dt.floor("D")
         else:
-            d["X"] = d[DATE_COL].dt.floor(f"{bin_hours}H")
+            bh = int(bin_hours)
+            if bh <= 0:
+                bh = 1
+            d["X"] = d[DATE_COL].dt.floor(f"{bh}h")
         return d.groupby(["Year", "X"])[metric].agg(["mean", "min", "max"]).reset_index()
 
     def build_same_monthday_stats_sec(df, metric, bin_hours=SEC_BIN_HOURS):
