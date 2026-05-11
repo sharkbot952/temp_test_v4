@@ -1,17 +1,12 @@
 import hashlib
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
 import xarray as xr
-
 import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
 
-# =====================================================
-# ページ設定
-# =====================================================
 st.set_page_config(page_title="", layout="wide")
 
 APP_DIR = Path(__file__).resolve().parent
@@ -19,29 +14,24 @@ DATA_DIR = APP_DIR / "data"
 CSV_PATH = DATA_DIR / "Taiki_temp.csv"
 CMEM_THETAO_CSV_PATH = DATA_DIR / "cmem_thetao.csv"
 
-# ★点切り抜き済みWAV（位置は確定済みなのでPOINTは不要）
+
+ENV_CSV_PATH = DATA_DIR / "asahihama_env2.csv"
+ENV_ENCODING = "utf-8-sig"
 FN_MY   = DATA_DIR / "cmem_wav_MY.nc"
 FN_ANFC = DATA_DIR / "cmem_wav_ANFC.nc"
 
-# =====================================================
-# 水温側：固定設定
-# =====================================================
 ENCODING = "utf-8-sig"
 DATE_COL = "DATE"
-METRIC = "depth_avg"  # 水温（1–3m平均）
+METRIC = "depth_avg"
 HOT_RED = "#d32f2f"
 
-# =====================================================
-# 波浪側：固定設定（スコア等はUIで変更させない）
-# =====================================================
-# ★点ncなので位置指定は不要（旧POINT_*は廃止）
 POINT_MY = None
 POINT_ANFC = None
 
 USE_JST = True
+JST_TZ = "Asia/Tokyo"
 DROP_LEAPDAY = True
 
-# 旭浜：方向帯（固定）
 ENTRANCE_AXIS_DEG = 20.0
 OUTER_BW_AXIS_DEG = 45.0
 INNER_BW_AXIS_DEG = 135.0
@@ -52,30 +42,22 @@ SIG_INNER, W_INNER = 35.0, 0.55
 DIR_MODE = "max"
 ALLOW_180_FLIP = True
 
-# 合成スコア（固定）
 Q_LOW, Q_HIGH = 0.05, 0.95
 SMOOTH_DAYS = 3
 
-# --- 追加（A+B）: スコア強調パラメータ ---
-DIR_EXP_Q = 0.60        # A: 方向の指数（<1 で頭打ち緩和、0.5〜0.8推奨）
-EXCESS_AH = 0.80        # B: 波高の超過分ブースト係数
-EXCESS_AT = 0.50        # B: 周期の超過分ブースト係数
-EXCESS_P  = 1.20        # B: 超過分の非線形（1.0〜1.5推奨）
+DIR_EXP_Q = 0.60
+EXCESS_AH = 0.80
+EXCESS_AT = 0.50
+EXCESS_P  = 1.20
 
-# コメント警報（固定）
 ALERT_SCORE = 0.4
 ALERT_DAYS = 4
 WATCH_DAYS = 2
 LOOKBACK_DAYS = 60
 
-# 表示（固定）
-RECENT_DAYS_TABLE = 10  # 表は最新10日
+RECENT_DAYS_TABLE = 10
 
-# =====================================================
-# UI（ピル型ボタン）ユーティリティ
-# =====================================================
 def pill_toggle(options, default, key, label=""):
-    """segmented_control（ピル）優先。無ければ radio(horizontal) にフォールバック。"""
     try:
         return st.segmented_control(
             label,
@@ -95,9 +77,6 @@ def pill_toggle(options, default, key, label=""):
             label_visibility="collapsed",
         )
 
-# =====================================================
-# 水温：共通ユーティリティ
-# =====================================================
 def safe_row_mean(df, cols):
     cols = [c for c in cols if c in df.columns]
     if not cols:
@@ -157,9 +136,6 @@ def add_line(fig, x, y, color, name, yaxis="y", width=2.2, dash=None, alpha=1.0)
         )
     )
 
-# =====================================================
-# 水温：要約ユーティリティ
-# =====================================================
 def dekad(day: int):
     if day <= 10:
         return "上旬"
@@ -188,9 +164,6 @@ def build_month_dekad_by_year(df, month, years):
                 }
     return out
 
-# =====================================================
-# 水温：データ読み込み
-# =====================================================
 @st.cache_data(show_spinner="データ読み込み中...", ttl=600)
 def load_raw(csv_path: Path, _hash_val: str):
     df = pd.read_csv(str(csv_path), encoding=ENCODING)
@@ -207,28 +180,18 @@ def load_raw(csv_path: Path, _hash_val: str):
     df["Day"] = df[DATE_COL].dt.day
     return df
 
-
-# =====================================================
-# CMEM（モデル水温）：データ読み込み（UTC→JST）
-# =====================================================
 @st.cache_data(show_spinner="CMEMデータ読み込み中...", ttl=600)
 def load_cmem_thetao(csv_path: Path, _hash_val: str):
-    """cmem_thetao.csv を読み込み、UTC→JSTへ変換した Date_JST を付与する。
-    期待列: Date, Depth, Temp（DateはUTCのISO/tz付き）
-    """
     df = pd.read_csv(str(csv_path))
     if 'Date' not in df.columns or 'Temp' not in df.columns:
         return pd.DataFrame(columns=['Date', 'Date_JST', 'Depth', 'Temp'])
     df['Date'] = pd.to_datetime(df['Date'], errors='coerce', utc=True)
     df = df.dropna(subset=['Date']).copy()
-    df['Date_JST'] = df['Date'] + pd.Timedelta(hours=9)
+    df['Date_JST'] = df['Date'].dt.tz_convert(JST_TZ).dt.tz_localize(None)
     if 'Depth' not in df.columns:
         df['Depth'] = np.nan
     return df
 
-# =====================================================
-# 波浪：共通関数
-# =====================================================
 def pick_coord(ds, candidates):
     for c in candidates:
         if c in ds.coords or c in ds.dims:
@@ -295,9 +258,6 @@ def build_dir_targets():
 
 @st.cache_data(show_spinner=False, ttl=600)
 def load_wave_daily(fn: str, point_latlon, date_range, ref_quantiles=None):
-    """NetCDF -> 日別（Hmax, Tp_mean, Dir_mean, score）
-       ※点切り抜き済みncなら point_latlon=None でOK（位置指定を不要化）
-    """
     start_date, end_date = date_range
 
     ds = xr.open_dataset(fn)
@@ -316,9 +276,7 @@ def load_wave_daily(fn: str, point_latlon, date_range, ref_quantiles=None):
 
     ds = ds.sel({time_name: slice(start_utc, end_utc)})
 
-    # ---- ここが修正点：点切り抜き済みncなら位置指定を不要化 ----
     if point_latlon is None:
-        # lat/lon が単一点ならそのまま
         if (lat_name in ds.coords and ds[lat_name].size == 1) and (lon_name in ds.coords and ds[lon_name].size == 1):
             pt = ds
         else:
@@ -349,9 +307,9 @@ def load_wave_daily(fn: str, point_latlon, date_range, ref_quantiles=None):
 
     daily = pd.DataFrame(
         {
-            "Hmax": df[v_h].resample("D").max(),
-            "Tp_mean": df[v_t].resample("D").mean(),
-            "Dir_mean": df[v_d].resample("D").mean(),
+            "Hmax": df[v_h].resample("3H").max(),
+            "Tp_mean": df[v_t].resample("3H").mean(),
+            "Dir_mean": df[v_d].resample("3H").mean(),
         }
     ).dropna()
 
@@ -384,11 +342,9 @@ def load_wave_daily(fn: str, point_latlon, date_range, ref_quantiles=None):
         daily["D_idx"] = D1
 
 
-    # --- A) 方向は活かすが、頭打ちを緩める（単調性は維持） ---
     d_eff = np.clip(daily["D_idx"].astype(float), 0, 1) ** DIR_EXP_Q
     score_base = daily["H_idx"].astype(float) * daily["T_idx"].astype(float) * d_eff
 
-    # --- B) p95超の"超過分"を危険度へ戻す（越波級を強調） ---
     denH = max(H_hi - H_lo, 1e-12)
     denT = max(T_hi - T_lo, 1e-12)
     H_excess = np.clip((daily["Hmax"].astype(float) - H_hi) / denH, 0, None)
@@ -405,7 +361,6 @@ def load_wave_daily(fn: str, point_latlon, date_range, ref_quantiles=None):
     return daily, {}
 
 def classify_alerts(daily: pd.DataFrame):
-    """score>=ALERT_SCORE 連続ALERT_DAYS以上=警報、WATCH_DAYS以上=注意報"""
     if daily is None or daily.empty or "score" not in daily.columns:
         return "NO_DATA", "データがありません（期間/格子点/欠損の可能性）。", {}
 
@@ -452,23 +407,127 @@ def classify_alerts(daily: pd.DataFrame):
     )
     return status, msg, {"duration_days": int(dur), "peak_score": peak_score}
 
+@st.cache_data(show_spinner=False, ttl=600)
+def load_env(csv_path: Path, _hash_val: str) -> pd.DataFrame:
+    df = pd.read_csv(str(csv_path), encoding=ENV_ENCODING)
+
+    if "日付" not in df.columns:
+        return pd.DataFrame()
+
+    df["日付"] = pd.to_datetime(df["日付"], errors="coerce")
+    df = df.dropna(subset=["日付"]).copy()
+
+    for c in ["時化", "流木等", "濁り"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    df["DateKey"] = df["日付"].dt.normalize()
+    df = df.set_index("DateKey").sort_index()
+    return df
 
 def plot_wave(daily: pd.DataFrame, title: str):
     d = daily.sort_index().copy()
     fig = go.Figure()
+
     if "kind" in d.columns:
         for k, g in d.groupby("kind"):
-            fig.add_trace(go.Scatter(x=g.index, y=g["score"], mode="lines+markers",
-                                     name=f"スコア({k})", line=dict(width=2)))
-            fig.add_trace(go.Scatter(x=g.index, y=g["Hmax"], mode="lines",
-                                     name=f"波高(m)({k})", yaxis="y2",
-                                     line=dict(width=2, dash="dot")))
+            fig.add_trace(go.Scatter(
+                x=g.index, y=g["score"], mode="lines+markers",
+                name=f"スコア({k})", line=dict(width=2)
+            ))
+            fig.add_trace(go.Scatter(
+                x=g.index, y=g["Hmax"], mode="lines",
+                name=f"波高(m)({k})", yaxis="y2",
+                line=dict(width=2, dash="dot")
+            ))
     else:
-        fig.add_trace(go.Scatter(x=d.index, y=d["score"], mode="lines+markers",
-                                 name="スコア", line=dict(width=2)))
-        fig.add_trace(go.Scatter(x=d.index, y=d["Hmax"], mode="lines",
-                                 name="波高(m)", yaxis="y2",
-                                 line=dict(width=2, dash="dot")))
+        fig.add_trace(go.Scatter(
+            x=d.index, y=d["score"], mode="lines+markers",
+            name="スコア", line=dict(width=2)
+        ))
+        fig.add_trace(go.Scatter(
+            x=d.index, y=d["Hmax"], mode="lines",
+            name="波高(m)", yaxis="y2",
+            line=dict(width=2, dash="dot")
+        ))
+
+    try:
+        if ENV_CSV_PATH.exists():
+            b = ENV_CSV_PATH.read_bytes()
+            env_hash = f"{hashlib.sha1(b).hexdigest()}_{len(b)}"
+            env = load_env(ENV_CSV_PATH, env_hash)
+
+            if (env is not None) and (not env.empty) and ("時化" in env.columns):
+                idx = pd.DatetimeIndex(pd.to_datetime(d.index))
+                tz = idx.tz
+                
+                def _x(dt_naive_jst):
+                    if tz is None:
+                        return dt_naive_jst
+                    if isinstance(dt_naive_jst, pd.DatetimeIndex):
+                        return dt_naive_jst.tz_localize(JST_TZ).tz_convert(tz)
+                    return pd.to_datetime(dt_naive_jst).tz_localize(JST_TZ).tz_convert(tz)
+                if tz is None:
+                    idx_jst_naive = idx
+                else:
+                    idx_jst = idx.tz_convert(JST_TZ)
+                    idx_jst_naive = idx_jst.tz_localize(None)
+
+                days = pd.DatetimeIndex(sorted(set(idx_jst_naive.normalize())))
+                present_days = set(pd.DatetimeIndex(env.index).normalize())
+                
+                for day in days:
+                    if day not in present_days:
+                        x0 = _x(day)
+                        x1 = _x(day + pd.Timedelta(days=1))
+                        fig.add_vrect(
+                            x0=x0,
+                            x1=x1,
+                            fillcolor="#BDBDBD",
+                            opacity=0.22,
+                            line_width=0,
+                            layer="below",
+                        )
+                
+                s = env.reindex(days)["時化"].dropna()
+
+                if not s.empty:
+                    colmap = {1: "#FFEB3B", 2: "#FF9800", 3: "#F44336"}
+
+                    for day, val in s.items():
+                        if not np.isfinite(val):
+                            continue
+                        v = int(val)
+                        x0 = _x(day)
+                        x1 = _x(day + pd.Timedelta(days=1))
+                        fig.add_vrect(
+                            x0=x0,
+                            x1=x1,
+                            fillcolor=colmap.get(v, "#999999"),
+                            opacity=0.06 + 0.06 * v,
+                            line_width=0,
+                            layer="below",
+                        )
+
+                    x = s.index + pd.Timedelta(hours=12)
+                    if tz is not None:
+                        x = _x(x)
+                    y = (s.values - 1.0) / 2.0
+                    colors = [colmap.get(int(v), "#999999") for v in s.values]
+
+                    fig.add_trace(go.Scatter(
+                        x=x, y=y,
+                        mode="markers",
+                        name="時化(作業日誌)",
+                        marker=dict(
+                            symbol="square", size=10, color=colors,
+                            line=dict(width=0.5, color="rgba(0,0,0,0.4)")
+                        ),
+                        customdata=s.values,
+                        hovertemplate="日付=%{x|%Y-%m-%d}<br>時化=%{customdata}<extra></extra>",
+                    ))
+    except Exception:
+        pass
 
     fig.update_layout(
         template="plotly_white",
@@ -482,9 +541,6 @@ def plot_wave(daily: pd.DataFrame, title: str):
     )
     return fig
 
-# =====================================================
-# 起動：水温CSVの読み込み
-# =====================================================
 df_raw = None
 years = []
 CURRENT_YEAR = None
@@ -496,14 +552,8 @@ if CSV_PATH.exists():
     years = sorted(df_raw["Year"].dropna().unique().tolist())
     CURRENT_YEAR = max(years) if years else None
 
-# =====================================================
-# UI：モード
-# =====================================================
 mode = pill_toggle(["水温", "うねり", "グラフ"], default="水温", key="mode")
 
-# =====================================================
-# モード：水温要約
-# =====================================================
 if mode == "水温":
     if df_raw is None:
         st.error(f"CSV が見つかりません: {CSV_PATH}（repoの data/ に置いてください）")
@@ -551,9 +601,6 @@ if mode == "水温":
         unsafe_allow_html=True,
     )
 
-# =====================================================
-# モード：うねり
-# =====================================================
 elif mode == "うねり":
     @st.cache_data(show_spinner=False, ttl=600)
     def get_time_range(fn: str):
@@ -598,7 +645,6 @@ elif mode == "うねり":
     start_ts = pd.Timestamp(start_date)
     end_ts = pd.Timestamp(end_date)
 
-    # ★固定のRANGE_* は使わず、ファイルの実データ範囲でMY/ANFCを判定する
     if (my_range is not None) and (start_ts <= my_range[1].normalize()) and (end_ts >= my_range[0].normalize()):
         hit_my = True
     else:
@@ -612,7 +658,6 @@ elif mode == "うねり":
 
     if hit_my and hit_anfc:
         use_kind = "BOTH"
-        # MY と ANFC をまたぐ場合は後段で両方読み込んで結合する
         fn = None
         point = None
         avail = None
@@ -634,8 +679,6 @@ elif mode == "うねり":
         st.error("ファイルがありません（data/ に .nc を置いてください）")
         st.stop()
 
-
-    # データ範囲に合わせてクランプ（BOTH の場合は各系列で個別にクランプ）
     if (use_kind != "BOTH") and (avail is not None):
         s_clamp = max(start_ts, avail[0].normalize())
         e_clamp = min(end_ts, avail[1].normalize())
@@ -645,7 +688,6 @@ elif mode == "うねり":
 
     with st.spinner("波浪を計算中..."):
 
-        # --- 参照（正規化）基準：MY+ANFC が揃う場合は全期間で共通化（比較のため） ---
         daily_ref = None
         if (my_range is not None) and FN_MY.exists() and (anfc_range is not None) and FN_ANFC.exists():
             my_s = my_range[0].normalize()
@@ -656,7 +698,6 @@ elif mode == "うねり":
             daily_an_ref, _ = load_wave_daily(str(FN_ANFC), POINT_ANFC, (an_s.strftime("%Y-%m-%d"), an_e.strftime("%Y-%m-%d")))
             daily_ref = pd.concat([daily_my_ref, daily_an_ref], axis=0).sort_index()
         else:
-            # フォールバック：選択した系列の全期間を参照にする
             if use_kind == "ANFC":
                 ref_s = anfc_range[0].normalize()
                 ref_e = anfc_range[1].normalize()
@@ -742,16 +783,11 @@ elif mode == "うねり":
             "text/csv",
         )
 
-# =====================================================
-# モード：グラフ（水温）
-# =====================================================
 else:
     if df_raw is None:
         st.error(f"CSV が見つかりません: {CSV_PATH}（repoの data/ に置いてください）")
         st.stop()
 
-
-    # --- CMEM（モデル水温）読み込み（存在すれば） ---
     df_cmem = None
     if CMEM_THETAO_CSV_PATH.exists():
         cmem_bytes = CMEM_THETAO_CSV_PATH.read_bytes()
@@ -834,7 +870,6 @@ else:
 
     with tab_ts:
         fig = go.Figure()
-        # --- CMEM（モデル水温）：選択年のみ（同一時刻の min/max を帯、mean を点線）
         cmem_ts_stats = None
         if df_cmem is not None and (not df_cmem.empty):
             dcm = df_cmem[["Date_JST", "Temp"]].dropna().copy()
@@ -852,7 +887,6 @@ else:
                 continue
             add_band(fig, d["X"], d["min"], d["max"], colors[y], alpha=0.25, yaxis="y")
             add_line(fig, d["X"], d["mean"], colors[y], f"{y} 水温", yaxis="y", width=2.4)
-        # --- CMEM overlay（主軸y）：選択年のみ表示（帯=min-max, 線=mean） ---
         if cmem_ts_stats is not None and (not cmem_ts_stats.empty):
             for y in selected_years:
                 gcm = cmem_ts_stats[cmem_ts_stats["Year"] == y]
@@ -887,8 +921,6 @@ else:
 
     with tab_md:
         fig = go.Figure()
-        # --- CMEM（モデル水温）：選択年のみ（同月日比較；帯=min-max, 線=mean）
-        # ※ mean/min/max は、(年, 月日(+時刻bin))ごとに Temp を集計（深さ方向も含む）
         cmem_md_stats = None
         if df_cmem is not None and (not df_cmem.empty):
             dcm = df_cmem[["Date_JST", "Temp"]].dropna().copy()
@@ -910,7 +942,6 @@ else:
                 continue
             add_band(fig, d["AlignX"], d["min"], d["max"], colors[y], alpha=0.25, yaxis="y")
             add_line(fig, d["AlignX"], d["mean"], colors[y], f"{y} 水温", yaxis="y", width=2.4)
-        # --- CMEM overlay（主軸y）：選択年のみ表示（帯=min-max, 線=mean） ---
         if cmem_md_stats is not None and (not cmem_md_stats.empty):
             for y in selected_years:
                 gcm = cmem_md_stats[cmem_md_stats["Year"] == y]
