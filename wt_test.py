@@ -307,9 +307,9 @@ def load_wave_daily(fn: str, point_latlon, date_range, ref_quantiles=None):
 
     daily = pd.DataFrame(
         {
-            "Hmax": df[v_h].resample("3H").max(),
-            "Tp_mean": df[v_t].resample("3H").mean(),
-            "Dir_mean": df[v_d].resample("3H").mean(),
+            "Hmax": df[v_h].resample(pd.Timedelta(hours=3)).max(),
+            "Tp_mean": df[v_t].resample(pd.Timedelta(hours=3)).mean(),
+            "Dir_mean": df[v_d].resample(pd.Timedelta(hours=3)).mean(),
         }
     ).dropna()
 
