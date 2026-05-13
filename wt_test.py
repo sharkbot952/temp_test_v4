@@ -14,7 +14,6 @@ DATA_DIR = APP_DIR / "data"
 CSV_PATH = DATA_DIR / "Taiki_temp.csv"
 CMEM_THETAO_CSV_PATH = DATA_DIR / "cmem_thetao.csv"
 
-
 ENV_CSV_PATH = DATA_DIR / "asahihama_env2.csv"
 ENV_ENCODING = "utf-8-sig"
 FN_MY   = DATA_DIR / "cmem_wav_MY.nc"
@@ -57,6 +56,13 @@ LOOKBACK_DAYS = 60
 
 RECENT_DAYS_TABLE = 10
 
+
+SEC_BIN_HOURS = 3
+FILL_MISSING_TIME = True
+FILL_FREQ = "30min"
+
+GAP_BREAK = pd.Timedelta("3D")
+
 def pill_toggle(options, default, key, label=""):
     try:
         return st.segmented_control(
@@ -77,15 +83,18 @@ def pill_toggle(options, default, key, label=""):
             label_visibility="collapsed",
         )
 
+
 def safe_row_mean(df, cols):
     cols = [c for c in cols if c in df.columns]
     if not cols:
         return pd.Series(np.nan, index=df.index)
     return df[cols].mean(axis=1, skipna=True)
 
+
 def year_color_map(years):
     palette = px.colors.qualitative.Set2
     return {y: palette[i % len(palette)] for i, y in enumerate(sorted(years))}
+
 
 def rgba_from_color(color, alpha):
     color = str(color).strip()
@@ -97,44 +106,104 @@ def rgba_from_color(color, alpha):
         return f"rgba({r},{g},{b},{alpha})"
     return f"rgba(0,0,0,{alpha})"
 
+
+
+
+def insert_gaps_by_time(x, y, gap: pd.Timedelta):
+    """時刻が gap 以上飛んだ箇所で None を挿入し、線を切る。"""
+    if x is None or y is None:
+        return x, y
+
+    xi = pd.to_datetime(pd.Series(x), errors="coerce")
+    yi = pd.Series(y)
+
+    # 念のため時刻でソート
+    order = np.argsort(xi.values)
+    xi = xi.iloc[order].reset_index(drop=True)
+    yi = yi.iloc[order].reset_index(drop=True)
+
+    dt = xi.diff()
+
+    out_x, out_y = [], []
+    for i in range(len(xi)):
+        if i > 0 and pd.notna(dt.iloc[i]) and dt.iloc[i] >= gap:
+            out_x.append(xi.iloc[i])
+            out_y.append(None)
+        out_x.append(xi.iloc[i])
+        out_y.append(yi.iloc[i])
+
+    return out_x, out_y
+
+
+def segment_by_gap(x, y_list, gap: pd.Timedelta):
+    """x の時刻差が gap 以上のところで系列を分割し、各セグメントの (x, y1, y2,...) を返す。
+    fill(tonexty) がギャップを跨いで三角形になるのを防ぐため、塗りもセグメントごとに描く。"""
+    xi = pd.to_datetime(pd.Series(x), errors="coerce")
+    order = np.argsort(xi.values)
+    xi = xi.iloc[order].reset_index(drop=True)
+    ys = [pd.Series(y).iloc[order].reset_index(drop=True) for y in y_list]
+    dt = xi.diff()
+    breaks = [i for i in range(1, len(xi)) if pd.notna(dt.iloc[i]) and dt.iloc[i] >= gap]
+    cuts = [0] + breaks + [len(xi)]
+    out = []
+    for a, b in zip(cuts[:-1], cuts[1:]):
+        if b - a <= 0:
+            continue
+        xseg = xi.iloc[a:b].tolist()
+        ysegs = [yy.iloc[a:b].tolist() for yy in ys]
+        out.append((xseg, *ysegs))
+    return out
+
+
 def add_band(fig, x, ymin, ymax, color, alpha=0.30, yaxis="y"):
-    fig.add_trace(
-        go.Scatter(
-            x=x,
-            y=ymin,
-            mode="lines",
-            line=dict(width=0),
-            showlegend=False,
-            hoverinfo="skip",
-            yaxis=yaxis,
+    segs = segment_by_gap(x, [ymin, ymax], GAP_BREAK)
+    for (xseg, yminseg, ymaxseg) in segs:
+        fig.add_trace(
+            go.Scatter(
+                x=xseg,
+                y=yminseg,
+                mode="lines",
+                line=dict(width=0),
+                showlegend=False,
+                hoverinfo="skip",
+                yaxis=yaxis,
+            )
         )
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=x,
-            y=ymax,
-            mode="lines",
-            line=dict(width=0),
-            fill="tonexty",
-            fillcolor=rgba_from_color(color, alpha),
-            showlegend=False,
-            hoverinfo="skip",
-            yaxis=yaxis,
+        fig.add_trace(
+            go.Scatter(
+                x=xseg,
+                y=ymaxseg,
+                mode="lines",
+                line=dict(width=0),
+                fill="tonexty",
+                fillcolor=rgba_from_color(color, alpha),
+                showlegend=False,
+                hoverinfo="skip",
+                yaxis=yaxis,
+            )
         )
-    )
+
+
 
 def add_line(fig, x, y, color, name, yaxis="y", width=2.2, dash=None, alpha=1.0):
-    fig.add_trace(
-        go.Scatter(
-            x=x,
-            y=y,
-            mode="lines",
-            line=dict(color=rgba_from_color(color, alpha) if alpha < 1.0 else color, width=width, dash=dash),
-            name=name,
-            showlegend=True,
-            yaxis=yaxis,
+    segs = segment_by_gap(x, [y], GAP_BREAK)
+    first = True
+    for (xseg, yseg) in segs:
+        fig.add_trace(
+            go.Scatter(
+                x=xseg,
+                y=yseg,
+                mode="lines",
+                connectgaps=False,
+                line=dict(color=rgba_from_color(color, alpha) if alpha < 1.0 else color, width=width, dash=dash),
+                name=name,
+                showlegend=True if first else False,
+                yaxis=yaxis,
+            )
         )
-    )
+        first = False
+
+
 
 def dekad(day: int):
     if day <= 10:
@@ -143,6 +212,7 @@ def dekad(day: int):
         return "中旬"
     else:
         return "下旬"
+
 
 def build_month_dekad_by_year(df, month, years):
     d = df[[DATE_COL, "Year", "Month", "Day", METRIC]].dropna().copy()
@@ -164,6 +234,7 @@ def build_month_dekad_by_year(df, month, years):
                 }
     return out
 
+
 @st.cache_data(show_spinner="データ読み込み中...", ttl=600)
 def load_raw(csv_path: Path, _hash_val: str):
     df = pd.read_csv(str(csv_path), encoding=ENCODING)
@@ -180,6 +251,41 @@ def load_raw(csv_path: Path, _hash_val: str):
     df["Day"] = df[DATE_COL].dt.day
     return df
 
+
+# ===== 追加：欠測日時を NaN 行として挿入（行が無い欠測への対応） =====
+def reindex_full_time(df: pd.DataFrame, freq: str = "30min") -> pd.DataFrame:
+    if df is None or df.empty or DATE_COL not in df.columns:
+        return df
+    d = df.copy()
+    for c in ["Year", "Month", "Day"]:
+        if c in d.columns:
+            d = d.drop(columns=c)
+
+    d = d.sort_values(DATE_COL)
+    num_cols = d.select_dtypes(include=["number"]).columns.tolist()
+
+    agg = {}
+    for c in d.columns:
+        if c == DATE_COL:
+            continue
+        agg[c] = "mean" if c in num_cols else "first"
+
+    d = d.groupby(DATE_COL, as_index=False).agg(agg)
+    d[DATE_COL] = pd.to_datetime(d[DATE_COL], errors="coerce")
+    d = d.dropna(subset=[DATE_COL]).sort_values(DATE_COL)
+    d = d.set_index(DATE_COL)
+
+    full_idx = pd.date_range(start=d.index.min(), end=d.index.max(), freq=freq)
+    d = d.reindex(full_idx)
+
+    d[DATE_COL] = d.index
+    d["Year"] = d.index.year
+    d["Month"] = d.index.month
+    d["Day"] = d.index.day
+
+    return d.reset_index(drop=True)
+
+
 @st.cache_data(show_spinner="CMEMデータ読み込み中...", ttl=600)
 def load_cmem_thetao(csv_path: Path, _hash_val: str):
     df = pd.read_csv(str(csv_path))
@@ -192,11 +298,13 @@ def load_cmem_thetao(csv_path: Path, _hash_val: str):
         df['Depth'] = np.nan
     return df
 
+
 def pick_coord(ds, candidates):
     for c in candidates:
         if c in ds.coords or c in ds.dims:
             return c
     raise KeyError(f"Coordinate not found: {candidates} / coords={list(ds.coords)} dims={list(ds.dims)}")
+
 
 def pick_var(dsobj, base_names):
     for b in base_names:
@@ -207,6 +315,7 @@ def pick_var(dsobj, base_names):
             return v
     raise KeyError(f"Variable not found: {base_names} / available={list(dsobj.data_vars)}")
 
+
 def scale01_lohi(s, lo, hi):
     s = s.astype(float)
     if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
@@ -215,14 +324,17 @@ def scale01_lohi(s, lo, hi):
     x = (s - lo) / (hi - lo)
     return np.clip(x, 0, 1)
 
+
 def calc_lohi(s, qlow=0.05, qhigh=0.95):
     s = s.astype(float)
     lo = np.nanquantile(s, qlow)
     hi = np.nanquantile(s, qhigh)
     return float(lo), float(hi)
 
+
 def ang_diff(a, b):
     return (a - b + 180) % 360 - 180
+
 
 def choose_normal(axis_deg, offshore_bearing_deg):
     n1 = (axis_deg + 90) % 360
@@ -231,9 +343,11 @@ def choose_normal(axis_deg, offshore_bearing_deg):
     d2 = abs(ang_diff(n2, offshore_bearing_deg))
     return n1 if d1 <= d2 else n2
 
+
 def dir_weight_gauss(dir_deg, target_deg, sigma_deg):
     delta = ang_diff(dir_deg, target_deg)
     return np.exp(-0.5 * (delta / sigma_deg) ** 2)
+
 
 def dir_weight_multi(dir_deg_array, targets, mode="max"):
     comps = []
@@ -246,6 +360,7 @@ def dir_weight_multi(dir_deg_array, targets, mode="max"):
         return np.clip(np.sum(M, axis=0), 0, 1)
     raise ValueError("DIR_MODE must be 'max' or 'sum'")
 
+
 def build_dir_targets():
     entrance_target = choose_normal(ENTRANCE_AXIS_DEG, OFFSHORE_BEARING_DEG)
     outer_target = choose_normal(OUTER_BW_AXIS_DEG, OFFSHORE_BEARING_DEG)
@@ -255,6 +370,7 @@ def build_dir_targets():
         (outer_target, SIG_OUTER, W_OUTER),
         (inner_target, SIG_INNER, W_INNER),
     ]
+
 
 @st.cache_data(show_spinner=False, ttl=600)
 def load_wave_daily(fn: str, point_latlon, date_range, ref_quantiles=None):
@@ -322,7 +438,6 @@ def load_wave_daily(fn: str, point_latlon, date_range, ref_quantiles=None):
         md = daily.index.strftime("%m-%d")
         daily = daily[md != "02-29"].copy()
 
-    # 正規化基準
     if ref_quantiles is None:
         H_lo, H_hi = calc_lohi(daily["Hmax"], Q_LOW, Q_HIGH)
         T_lo, T_hi = calc_lohi(daily["Tp_mean"], Q_LOW, Q_HIGH)
@@ -359,6 +474,7 @@ def load_wave_daily(fn: str, point_latlon, date_range, ref_quantiles=None):
         daily["score_map"] = daily["score"]
 
     return daily, {}
+
 
 def classify_alerts(daily: pd.DataFrame):
     if daily is None or daily.empty or "score" not in daily.columns:
@@ -407,6 +523,7 @@ def classify_alerts(daily: pd.DataFrame):
     )
     return status, msg, {"duration_days": int(dur), "peak_score": peak_score}
 
+
 @st.cache_data(show_spinner=False, ttl=600)
 def load_env(csv_path: Path, _hash_val: str) -> pd.DataFrame:
     df = pd.read_csv(str(csv_path), encoding=ENV_ENCODING)
@@ -425,6 +542,7 @@ def load_env(csv_path: Path, _hash_val: str) -> pd.DataFrame:
     df = df.set_index("DateKey").sort_index()
     return df
 
+
 def plot_wave(daily: pd.DataFrame, title: str):
     d = daily.sort_index().copy()
     fig = go.Figure()
@@ -433,7 +551,7 @@ def plot_wave(daily: pd.DataFrame, title: str):
         for k, g in d.groupby("kind"):
             fig.add_trace(go.Scatter(
                 x=g.index, y=g["score"], mode="lines+markers",
-                name=f"スコア({k})", line=dict(width=2)
+                name=f"スコア({k})", line=dict(width=2), marker=dict(size=5),
             ))
             fig.add_trace(go.Scatter(
                 x=g.index, y=g["Hmax"], mode="lines",
@@ -443,7 +561,7 @@ def plot_wave(daily: pd.DataFrame, title: str):
     else:
         fig.add_trace(go.Scatter(
             x=d.index, y=d["score"], mode="lines+markers",
-            name="スコア", line=dict(width=2)
+            name="スコア", line=dict(width=2), marker=dict(size=5),
         ))
         fig.add_trace(go.Scatter(
             x=d.index, y=d["Hmax"], mode="lines",
@@ -460,13 +578,14 @@ def plot_wave(daily: pd.DataFrame, title: str):
             if (env is not None) and (not env.empty) and ("時化" in env.columns):
                 idx = pd.DatetimeIndex(pd.to_datetime(d.index))
                 tz = idx.tz
-                
+
                 def _x(dt_naive_jst):
                     if tz is None:
                         return dt_naive_jst
                     if isinstance(dt_naive_jst, pd.DatetimeIndex):
                         return dt_naive_jst.tz_localize(JST_TZ).tz_convert(tz)
                     return pd.to_datetime(dt_naive_jst).tz_localize(JST_TZ).tz_convert(tz)
+
                 if tz is None:
                     idx_jst_naive = idx
                 else:
@@ -475,7 +594,7 @@ def plot_wave(daily: pd.DataFrame, title: str):
 
                 days = pd.DatetimeIndex(sorted(set(idx_jst_naive.normalize())))
                 present_days = set(pd.DatetimeIndex(env.index).normalize())
-                
+
                 for day in days:
                     if day not in present_days:
                         x0 = _x(day)
@@ -488,7 +607,7 @@ def plot_wave(daily: pd.DataFrame, title: str):
                             line_width=0,
                             layer="below",
                         )
-                
+
                 s = env.reindex(days)["時化"].dropna()
 
                 if not s.empty:
@@ -534,12 +653,13 @@ def plot_wave(daily: pd.DataFrame, title: str):
         height=320,
         hovermode="x unified",
         title=title,
-        yaxis=dict(title="スコア (0–1)", range=[0, 1]),
+        yaxis=dict(title="スコア (0–1)", range=[0, 1.1]),
         yaxis2=dict(title="波高(m)", overlaying="y", side="right", showgrid=False),
         margin=dict(l=40, r=40, t=40, b=30),
         legend=dict(orientation="h", yanchor="top", y=-0.22, xanchor="left", x=0),
     )
     return fig
+
 
 df_raw = None
 years = []
@@ -549,6 +669,11 @@ if CSV_PATH.exists():
     csv_bytes = CSV_PATH.read_bytes()
     file_hash = f"{hashlib.sha1(csv_bytes).hexdigest()}_{len(csv_bytes)}"
     df_raw = load_raw(CSV_PATH, file_hash)
+
+    # ===== 追加：欠測日時補完（行が無い欠測） =====
+    if FILL_MISSING_TIME and df_raw is not None and not df_raw.empty:
+        df_raw = reindex_full_time(df_raw, freq=FILL_FREQ)
+
     years = sorted(df_raw["Year"].dropna().unique().tolist())
     CURRENT_YEAR = max(years) if years else None
 
@@ -602,6 +727,7 @@ if mode == "水温":
     )
 
 elif mode == "うねり":
+
     @st.cache_data(show_spinner=False, ttl=600)
     def get_time_range(fn: str):
         ds = xr.open_dataset(fn)
@@ -655,21 +781,17 @@ elif mode == "うねり":
     else:
         hit_anfc = False
 
-
     if hit_my and hit_anfc:
         use_kind = "BOTH"
         fn = None
-        point = None
         avail = None
     elif hit_anfc:
         use_kind = "ANFC"
         fn = str(FN_ANFC)
-        point = POINT_ANFC  # None
         avail = anfc_range
     elif hit_my:
         use_kind = "MY"
         fn = str(FN_MY)
-        point = POINT_MY  # None
         avail = my_range
     else:
         st.error("選択した期間がデータ範囲外です。開始日・終了日を見直してください。")
@@ -728,8 +850,7 @@ elif mode == "うねり":
                 if daily is not None and not daily.empty:
                     daily["kind"] = "ANFC"
 
-            else:  # BOTH
-                # MY 区間
+            else:
                 s_my = start_ts
                 e_my = min(end_ts, my_range[1].normalize())
                 daily_my, _ = load_wave_daily(str(FN_MY), POINT_MY,
@@ -738,7 +859,6 @@ elif mode == "うねり":
                 if daily_my is not None and not daily_my.empty:
                     daily_my["kind"] = "MY"
 
-                # ANFC 区間
                 s_an = max(start_ts, anfc_range[0].normalize())
                 e_an = end_ts
                 daily_an, _ = load_wave_daily(str(FN_ANFC), POINT_ANFC,
@@ -750,6 +870,7 @@ elif mode == "うねり":
                 daily = pd.concat([daily_my, daily_an], axis=0).sort_index()
                 if daily is not None and not daily.empty:
                     daily = daily[~daily.index.duplicated(keep="last")]
+
     status, msg, _ = classify_alerts(daily)
     if status == "ALERT":
         st.error(msg)
@@ -793,6 +914,7 @@ else:
         cmem_bytes = CMEM_THETAO_CSV_PATH.read_bytes()
         cmem_hash = f"{hashlib.sha1(cmem_bytes).hexdigest()}_{len(cmem_bytes)}"
         df_cmem = load_cmem_thetao(CMEM_THETAO_CSV_PATH, cmem_hash)
+
     c0, c1, c3 = st.columns([1.0, 1.1, 3.0])
 
     with c0:
@@ -830,8 +952,6 @@ else:
             t = d[DATE_COL].dt
             d["AlignX"] = pd.to_datetime(dict(year=2001, month=d["Month"], day=d["Day"], hour=t.hour, minute=t.minute, second=t.second))
         return d.groupby(["Year", "AlignX"])[metric].agg(["mean", "min", "max"]).reset_index()
-
-    SEC_BIN_HOURS = 3
 
     def build_timeseries_stats_sec(df, metric, bin_hours=SEC_BIN_HOURS):
         d = df[["Year", DATE_COL, metric]].dropna().copy()
@@ -887,6 +1007,7 @@ else:
                 continue
             add_band(fig, d["X"], d["min"], d["max"], colors[y], alpha=0.25, yaxis="y")
             add_line(fig, d["X"], d["mean"], colors[y], f"{y} 水温", yaxis="y", width=2.4)
+
         if cmem_ts_stats is not None and (not cmem_ts_stats.empty):
             for y in selected_years:
                 gcm = cmem_ts_stats[cmem_ts_stats["Year"] == y]
@@ -942,6 +1063,7 @@ else:
                 continue
             add_band(fig, d["AlignX"], d["min"], d["max"], colors[y], alpha=0.25, yaxis="y")
             add_line(fig, d["AlignX"], d["mean"], colors[y], f"{y} 水温", yaxis="y", width=2.4)
+
         if cmem_md_stats is not None and (not cmem_md_stats.empty):
             for y in selected_years:
                 gcm = cmem_md_stats[cmem_md_stats["Year"] == y]
