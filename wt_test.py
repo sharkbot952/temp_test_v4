@@ -1,4 +1,5 @@
 import hashlib
+import re
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -14,6 +15,8 @@ DATA_DIR = APP_DIR / "data"
 CSV_PATH = DATA_DIR / "Taiki_temp.csv"
 CMEM_THETAO_CSV_PATH = DATA_DIR / "cmem_thetao.csv"
 
+TEST_DATA_PATH = DATA_DIR / "test_data.csv"
+GROWTH_DATA_PATH = DATA_DIR / "Total_growth_data.csv"
 ENV_CSV_PATH = DATA_DIR / "asahihama_env2.csv"
 ENV_ENCODING = "utf-8-sig"
 FN_MY   = DATA_DIR / "cmem_wav_MY.nc"
@@ -106,18 +109,13 @@ def rgba_from_color(color, alpha):
         return f"rgba({r},{g},{b},{alpha})"
     return f"rgba(0,0,0,{alpha})"
 
-
-
-
 def insert_gaps_by_time(x, y, gap: pd.Timedelta):
-    """時刻が gap 以上飛んだ箇所で None を挿入し、線を切る。"""
     if x is None or y is None:
         return x, y
 
     xi = pd.to_datetime(pd.Series(x), errors="coerce")
     yi = pd.Series(y)
 
-    # 念のため時刻でソート
     order = np.argsort(xi.values)
     xi = xi.iloc[order].reset_index(drop=True)
     yi = yi.iloc[order].reset_index(drop=True)
@@ -136,8 +134,6 @@ def insert_gaps_by_time(x, y, gap: pd.Timedelta):
 
 
 def segment_by_gap(x, y_list, gap: pd.Timedelta):
-    """x の時刻差が gap 以上のところで系列を分割し、各セグメントの (x, y1, y2,...) を返す。
-    fill(tonexty) がギャップを跨いで三角形になるのを防ぐため、塗りもセグメントごとに描く。"""
     xi = pd.to_datetime(pd.Series(x), errors="coerce")
     order = np.argsort(xi.values)
     xi = xi.iloc[order].reset_index(drop=True)
@@ -183,8 +179,6 @@ def add_band(fig, x, ymin, ymax, color, alpha=0.30, yaxis="y"):
             )
         )
 
-
-
 def add_line(fig, x, y, color, name, yaxis="y", width=2.2, dash=None, alpha=1.0):
     segs = segment_by_gap(x, [y], GAP_BREAK)
     first = True
@@ -203,8 +197,6 @@ def add_line(fig, x, y, color, name, yaxis="y", width=2.2, dash=None, alpha=1.0)
         )
         first = False
 
-
-
 def dekad(day: int):
     if day <= 10:
         return "上旬"
@@ -212,7 +204,6 @@ def dekad(day: int):
         return "中旬"
     else:
         return "下旬"
-
 
 def build_month_dekad_by_year(df, month, years):
     d = df[[DATE_COL, "Year", "Month", "Day", METRIC]].dropna().copy()
@@ -251,8 +242,6 @@ def load_raw(csv_path: Path, _hash_val: str):
     df["Day"] = df[DATE_COL].dt.day
     return df
 
-
-# ===== 追加：欠測日時を NaN 行として挿入（行が無い欠測への対応） =====
 def reindex_full_time(df: pd.DataFrame, freq: str = "30min") -> pd.DataFrame:
     if df is None or df.empty or DATE_COL not in df.columns:
         return df
@@ -298,7 +287,51 @@ def load_cmem_thetao(csv_path: Path, _hash_val: str):
         df['Depth'] = np.nan
     return df
 
+@st.cache_data(show_spinner=False, ttl=600)
+def load_test_data(csv_path: Path, _hash_val: str) -> pd.DataFrame:
+    try:
+        df = pd.read_csv(str(csv_path), encoding="utf-8")
+    except Exception:
+        df = pd.read_csv(str(csv_path), encoding="utf-8-sig")
+    if "Date" not in df.columns:
+        return pd.DataFrame()
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    df = df.dropna(subset=["Date"]).copy()
+    df["Date"] = df["Date"].dt.normalize()
+    return df
 
+@st.cache_data(show_spinner=False, ttl=600)
+def load_growth_data(csv_path: Path, _hash_val: str) -> pd.DataFrame:
+    try:
+        df = pd.read_csv(str(csv_path), encoding="utf-8")
+    except Exception:
+        df = pd.read_csv(str(csv_path), encoding="utf-8-sig")
+
+    if ("Date" not in df.columns) and ("Year" not in df.columns):
+        return pd.DataFrame()
+
+    d1 = pd.to_datetime(df["Date"], errors="coerce") if "Date" in df.columns else None
+    d2 = pd.to_datetime(df["Year"], errors="coerce") if "Year" in df.columns else None
+
+    if d1 is None:
+        df["Date"] = d2
+    elif d2 is None:
+        df["Date"] = d1
+    else:
+        df["Date"] = d1.fillna(d2)
+
+    df = df.dropna(subset=["Date"]).copy()
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce").dt.normalize()
+    df = df.dropna(subset=["Date"]).copy()
+    df["Year"] = df["Date"].dt.year
+
+    for c in ["FL", "BW", "GW", "GSI"]:
+        if c in df.columns:
+            s = df[c].astype(str).str.replace(",", "", regex=False)
+            s = s.replace({"ND": None, "欠測": None, "nan": None, "": None})
+            df[c] = pd.to_numeric(s, errors="coerce")
+
+    return df
 def pick_coord(ds, candidates):
     for c in candidates:
         if c in ds.coords or c in ds.dims:
@@ -315,7 +348,6 @@ def pick_var(dsobj, base_names):
             return v
     raise KeyError(f"Variable not found: {base_names} / available={list(dsobj.data_vars)}")
 
-
 def scale01_lohi(s, lo, hi):
     s = s.astype(float)
     if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
@@ -324,17 +356,14 @@ def scale01_lohi(s, lo, hi):
     x = (s - lo) / (hi - lo)
     return np.clip(x, 0, 1)
 
-
 def calc_lohi(s, qlow=0.05, qhigh=0.95):
     s = s.astype(float)
     lo = np.nanquantile(s, qlow)
     hi = np.nanquantile(s, qhigh)
     return float(lo), float(hi)
 
-
 def ang_diff(a, b):
     return (a - b + 180) % 360 - 180
-
 
 def choose_normal(axis_deg, offshore_bearing_deg):
     n1 = (axis_deg + 90) % 360
@@ -343,11 +372,9 @@ def choose_normal(axis_deg, offshore_bearing_deg):
     d2 = abs(ang_diff(n2, offshore_bearing_deg))
     return n1 if d1 <= d2 else n2
 
-
 def dir_weight_gauss(dir_deg, target_deg, sigma_deg):
     delta = ang_diff(dir_deg, target_deg)
     return np.exp(-0.5 * (delta / sigma_deg) ** 2)
-
 
 def dir_weight_multi(dir_deg_array, targets, mode="max"):
     comps = []
@@ -360,7 +387,6 @@ def dir_weight_multi(dir_deg_array, targets, mode="max"):
         return np.clip(np.sum(M, axis=0), 0, 1)
     raise ValueError("DIR_MODE must be 'max' or 'sum'")
 
-
 def build_dir_targets():
     entrance_target = choose_normal(ENTRANCE_AXIS_DEG, OFFSHORE_BEARING_DEG)
     outer_target = choose_normal(OUTER_BW_AXIS_DEG, OFFSHORE_BEARING_DEG)
@@ -370,7 +396,6 @@ def build_dir_targets():
         (outer_target, SIG_OUTER, W_OUTER),
         (inner_target, SIG_INNER, W_INNER),
     ]
-
 
 @st.cache_data(show_spinner=False, ttl=600)
 def load_wave_daily(fn: str, point_latlon, date_range, ref_quantiles=None):
@@ -456,7 +481,6 @@ def load_wave_daily(fn: str, point_latlon, date_range, ref_quantiles=None):
     else:
         daily["D_idx"] = D1
 
-
     d_eff = np.clip(daily["D_idx"].astype(float), 0, 1) ** DIR_EXP_Q
     score_base = daily["H_idx"].astype(float) * daily["T_idx"].astype(float) * d_eff
 
@@ -541,7 +565,6 @@ def load_env(csv_path: Path, _hash_val: str) -> pd.DataFrame:
     df["DateKey"] = df["日付"].dt.normalize()
     df = df.set_index("DateKey").sort_index()
     return df
-
 
 def plot_wave(daily: pd.DataFrame, title: str):
     d = daily.sort_index().copy()
@@ -677,7 +700,7 @@ if CSV_PATH.exists():
     years = sorted(df_raw["Year"].dropna().unique().tolist())
     CURRENT_YEAR = max(years) if years else None
 
-mode = pill_toggle(["水温", "うねり", "グラフ"], default="水温", key="mode")
+mode = pill_toggle(["水温", "うねり", "グラフ", "飼育"], default="水温", key="mode")
 
 if mode == "水温":
     if df_raw is None:
@@ -904,6 +927,332 @@ elif mode == "うねり":
             "text/csv",
         )
 
+
+elif mode == "飼育":
+    if not TEST_DATA_PATH.exists():
+        st.error(f"test_data.csv が見つかりません: {TEST_DATA_PATH}（repoの data/ に置いてください）")
+        st.stop()
+
+    b = TEST_DATA_PATH.read_bytes()
+    h = f"{hashlib.sha1(b).hexdigest()}_{len(b)}"
+    df_test = load_test_data(TEST_DATA_PATH, h)
+
+    if df_test is None or df_test.empty:
+        st.warning("test_data.csv を読み込めません（Date列/欠測の可能性）。")
+        st.stop()
+
+    cages = sorted({int(m.group(1)) for c in df_test.columns for m in [re.match(r"^(\d+)_food$", c)] if m})
+    if not cages:
+        st.warning("飼育列（*_food）が見つかりません。列名をご確認ください。")
+        st.stop()
+
+    d0 = df_test.copy()
+    d0["Year"] = d0["Date"].dt.year
+
+    years_avail = set(d0["Year"].dropna().unique().tolist())
+    try:
+        if (df_raw is not None) and (not df_raw.empty) and ("Year" in df_raw.columns):
+            years_avail |= set(df_raw["Year"].dropna().unique().tolist())
+    except Exception:
+        pass
+
+    try:
+        if GROWTH_DATA_PATH.exists():
+            gb = GROWTH_DATA_PATH.read_bytes()
+            gh = f"{hashlib.sha1(gb).hexdigest()}_{len(gb)}"
+            gdf_all = load_growth_data(GROWTH_DATA_PATH, gh)
+            if (gdf_all is not None) and (not gdf_all.empty) and ("Year" in gdf_all.columns):
+                years_avail |= set(gdf_all["Year"].dropna().unique().tolist())
+        else:
+            gdf_all = pd.DataFrame()
+    except Exception:
+        gdf_all = pd.DataFrame()
+
+    years_avail = sorted([int(y) for y in years_avail if pd.notna(y)])
+    if not years_avail:
+        st.warning("年情報を作れませんでした。データをご確認ください。")
+        st.stop()
+
+    default_years = years_avail[-2:] if len(years_avail) >= 2 else years_avail
+
+    # UI（wt_ikesu.py のレイアウト踏襲）
+
+    # UI（固定：飼育別系列=非表示、水温/BW=常にON、BWまとめ幅=5）
+    c0, c1 = st.columns([2.2, 2.2])
+    with c0:
+        sel_cages = st.multiselect("飼育（デフォルト全選択）", options=cages, default=cages)
+    with c1:
+        sel_years = st.multiselect("年（比較）", options=years_avail, default=default_years)
+
+    # 固定設定（UI非表示）
+    show_cage_lines = False
+    show_temp = True
+    show_bw = True
+    bw_tol_days = 5
+
+    if not sel_cages or not sel_years:
+        st.stop()
+    def _align_md(dtindex: pd.DatetimeIndex) -> pd.DatetimeIndex:
+        md = pd.to_datetime(dtindex)
+        mask = ~((md.month == 2) & (md.day == 29))
+        md = md[mask]
+        return pd.to_datetime(dict(year=2001, month=md.month, day=md.day))
+
+    def _align_doy_from_date(dt: pd.Series) -> pd.Series:
+        d = pd.to_datetime(dt)
+        mask = ~((d.dt.month == 2) & (d.dt.day == 29))
+        d = d.where(mask)
+        return d.dt.dayofyear
+
+    def _bin_center_doy(doy: pd.Series, tol_days: int) -> pd.Series:
+        w = int(2 * tol_days + 1)
+        if w <= 1:
+            return doy
+        bin_id = ((doy - 1) // w).astype('Int64')
+        center = (bin_id * w + (w // 2) + 1).astype('Int64')
+        return center
+
+    def _doy_to_align_date(center_doy: pd.Series) -> pd.Series:
+        return pd.to_datetime('2001-01-01') + pd.to_timedelta(center_doy.astype(float) - 1, unit='D')
+
+    def build_year_series(year: int):
+        dY = d0[d0["Year"] == year].copy()
+        if dY.empty:
+            return None
+
+        per_cage = {}
+        all_dates = None
+        for i in sel_cages:
+            fcol = f"{i}_food"
+            ncol = f"{i}_number"
+            if fcol not in dY.columns:
+                continue
+            cols = ["Date", fcol]
+            if ncol in dY.columns:
+                cols.append(ncol)
+            tmp = dY[cols].copy()
+            agg = {fcol: "sum"}
+            if ncol in tmp.columns:
+                agg[ncol] = "mean"
+            tmp = tmp.groupby("Date", as_index=True).agg(agg).sort_index()
+
+            if ncol in tmp.columns:
+                tmp["perfish_day"] = tmp[fcol] / tmp[ncol]
+            else:
+                tmp["perfish_day"] = np.nan
+
+            tmp["perfish_cum"] = tmp["perfish_day"].cumsum()
+            per_cage[i] = tmp
+            all_dates = tmp.index if all_dates is None else all_dates.union(tmp.index)
+
+        if not per_cage:
+            return None
+
+        all_dates = all_dates.sort_values()
+
+        food_sum = None
+        n_sum = None
+        for i, tmp in per_cage.items():
+            tmp2 = tmp.reindex(all_dates)
+            fcol = f"{i}_food"
+            ncol = f"{i}_number"
+            f = tmp2[fcol].astype(float).fillna(0.0)
+            if ncol in tmp2.columns:
+                n = tmp2[ncol].astype(float).fillna(0.0)
+            else:
+                n = pd.Series(0.0, index=all_dates)
+            food_sum = f if food_sum is None else (food_sum + f)
+            n_sum = n if n_sum is None else (n_sum + n)
+
+        perfish_wday = (food_sum / n_sum.replace(0, np.nan)).astype(float)
+        perfish_wcum = perfish_wday.cumsum().ffill().fillna(0.0)
+
+        return {"all_dates": all_dates, "per_cage": per_cage, "wmean_cum": perfish_wcum}
+
+    series_by_year = {}
+    for y in sel_years:
+        y = int(y)
+        out = build_year_series(y)
+        if out is not None:
+            series_by_year[y] = out
+
+    tab_per, tab_food = st.tabs(["累積1尾あたり給餌量（年比較）", "累積給餌量（参考）"])
+
+    with tab_per:
+        fig = go.Figure()
+
+        palette = px.colors.qualitative.Set2
+        years_sorted = sorted([int(y) for y in sel_years])
+        colmap = {y: palette[i % len(palette)] for i, y in enumerate(years_sorted)}
+
+        for y in years_sorted:
+            if y not in series_by_year:
+                continue
+            d = series_by_year[y]
+            x = _align_md(pd.DatetimeIndex(d["all_dates"]))
+            yv = d["wmean_cum"].reindex(d["all_dates"]).astype(float).values
+            fig.add_trace(go.Scatter(
+                x=x,
+                y=yv,
+                mode="lines",
+                name=f"{y} 加重平均",
+                line=dict(color=colmap[y], width=3.8),
+            ))
+
+        if show_cage_lines:
+            for y in years_sorted:
+                if y not in series_by_year:
+                    continue
+                d = series_by_year[y]
+                x = _align_md(pd.DatetimeIndex(d["all_dates"]))
+                for i, tmp in d["per_cage"].items():
+                    yy = tmp.reindex(d["all_dates"])["perfish_cum"].astype(float).ffill().fillna(0.0).values
+                    fig.add_trace(go.Scatter(
+                        x=x,
+                        y=yy,
+                        mode="lines",
+                        showlegend=False,
+                        line=dict(color=colmap[y], width=1.0),
+                        opacity=0.10,
+                    ))
+
+        if show_temp and (df_raw is not None) and (not df_raw.empty):
+            dtemp = df_raw[[DATE_COL, METRIC]].dropna().copy()
+            dtemp["DateD"] = pd.to_datetime(dtemp[DATE_COL]).dt.floor("D")
+            dtemp["Year"] = dtemp["DateD"].dt.year
+            dtemp["Month"] = dtemp["DateD"].dt.month
+            dtemp["Day"] = dtemp["DateD"].dt.day
+            dtemp = dtemp[~((dtemp["Month"] == 2) & (dtemp["Day"] == 29))]
+            dtemp = dtemp.groupby(["Year", "Month", "Day"], as_index=False)[METRIC].mean()
+            dtemp["AlignX"] = pd.to_datetime(dict(year=2001, month=dtemp["Month"], day=dtemp["Day"]))
+
+            full_idx = pd.date_range("2001-01-01", "2001-12-31", freq="D")
+            full_idx = full_idx[~((full_idx.month == 2) & (full_idx.day == 29))]
+
+            for y in years_sorted:
+                tt = dtemp[dtemp["Year"] == y].set_index("AlignX")[METRIC].sort_index()
+                tt = tt.reindex(full_idx)
+                fig.add_trace(go.Scatter(
+                    x=full_idx,
+                    y=tt.values,
+                    mode="lines",
+                    name=f"{y} 水温",
+                    yaxis="y2",
+                    line=dict(color=rgba_from_color(colmap[y], 0.65), width=2.0, dash="dot"),
+                    connectgaps=False,
+                ))
+
+        if show_bw and (gdf_all is not None) and (not gdf_all.empty) and ("BW" in gdf_all.columns):
+            gdf = gdf_all.dropna(subset=["BW", "Date", "Year"]).copy()
+            for y in years_sorted:
+                gy = gdf[gdf["Year"] == y]
+                if gy.empty:
+                    continue
+                # BW：24本（半月×12）にまとめた箱ひげ
+                gy2 = gy.copy()
+                gy2["Month"] = gy2["Date"].dt.month
+                gy2["Day"] = gy2["Date"].dt.day
+                gy2 = gy2[~((gy2["Month"] == 2) & (gy2["Day"] == 29))].copy()
+                if gy2.empty:
+                    continue
+
+                half = (gy2["Day"] >= 16).astype(int)  # 0=前半, 1=後半
+                center_day = np.where(half.values == 0, 8, 23)
+                gy2["X"] = pd.to_datetime(dict(year=2001, month=gy2["Month"], day=center_day))
+                gy2 = gy2.dropna(subset=["X", "BW"]).copy()
+                if gy2.empty:
+                    continue
+
+                # 箱ひげ本体（Hoverは無効化、点は出さない）
+                w_ms = 15 * 24 * 3600 * 1000 * 0.60
+                fig.add_trace(go.Box(
+                    x=gy2["X"],
+                    y=gy2["BW"].astype(float).values,
+                    name=f"{y} BW",
+                    yaxis="y3",
+                    showlegend=False,
+                    hoverinfo="skip",
+                    boxpoints=False,
+                    width=w_ms,
+                    marker=dict(color=rgba_from_color(colmap[y], 0.12)),
+                    line=dict(color=colmap[y], width=1.4),
+                ))
+
+                # Hoverは現場向けに min/median/max のみ（箱の上でも拾う）
+                gq = gy2.groupby("X")["BW"].agg(lo="min", med="median", hi="max").reset_index().sort_values("X")
+                x = gq["X"].tolist()
+                _xh, _yh, _cd = [], [], []
+                for _x0, _lo, _med, _hi in zip(
+                    x,
+                    gq["lo"].astype(float).tolist(),
+                    gq["med"].astype(float).tolist(),
+                    gq["hi"].astype(float).tolist(),
+                ):
+                    _xh += [_x0, _x0, None]
+                    _yh += [_lo, _hi, None]
+                    _cd += [[_lo, _med, _hi], [_lo, _med, _hi], [None, None, None]]
+                fig.add_trace(go.Scatter(
+                    x=_xh,
+                    y=_yh,
+                    mode="lines",
+                    yaxis="y3",
+                    showlegend=False,
+                    line=dict(width=44, color="rgba(0,0,0,0)"),
+                    customdata=_cd,
+                    hovertemplate=(
+                        f"{y} BW<br>" +
+                        "%{x|%m/%d}<br>" +
+                        "min=%{customdata[0]:.0f}  median=%{customdata[1]:.0f}  max=%{customdata[2]:.0f}" +
+                        "<extra></extra>"
+                    ),
+                ))
+        fig.update_layout(
+            template="plotly_white",
+            height=660,
+            hovermode="x unified",
+            margin=dict(l=40, r=40, t=40, b=90),
+            legend=dict(orientation="h", yanchor="top", y=-0.22, xanchor="left", x=0),
+            xaxis=dict(title="（月日）", tickformat="%m/%d"),
+            yaxis=dict(title="累積1尾あたり給餌量 (g/尾)"),
+            yaxis2=dict(title="水温 (℃)", overlaying="y", side="right", showgrid=False),
+            yaxis3=dict(title="BW", overlaying="y", side="right", position=0.94, showgrid=False),
+        boxgap=0.02,
+        boxgroupgap=0.02,
+        )
+        fig.update_traces(hoverinfo="skip", selector=dict(type="box"))
+        st.plotly_chart(fig, use_container_width=True)
+
+    with tab_food:
+        st.info("参考表示")
+        fig = go.Figure()
+        palette = px.colors.qualitative.Set2
+        years_sorted = sorted([int(y) for y in sel_years])
+        colmap = {y: palette[i % len(palette)] for i, y in enumerate(years_sorted)}
+
+        for y in years_sorted:
+            if y not in series_by_year:
+                continue
+            d = series_by_year[y]
+            x = _align_md(pd.DatetimeIndex(d["all_dates"]))
+            food_sum = None
+            for i, tmp in d["per_cage"].items():
+                fcol = f"{i}_food"
+                f = tmp.reindex(d["all_dates"])[fcol].astype(float).fillna(0.0)
+                food_sum = f if food_sum is None else (food_sum + f)
+            yv = food_sum.cumsum().values
+            fig.add_trace(go.Scatter(x=x, y=yv, mode="lines", name=f"{y} 合計給餌(累積)",
+                                     line=dict(color=colmap[y], width=2.2)))
+
+        fig.update_layout(
+            template="plotly_white",
+            height=520,
+            hovermode="x unified",
+            margin=dict(l=40, r=40, t=40, b=90),
+            legend=dict(orientation="h", yanchor="top", y=-0.22, xanchor="left", x=0),
+            xaxis=dict(title="（月日）", tickformat="%m/%d"),
+            yaxis=dict(title="累積給餌量 (g)"),
+        )
+        st.plotly_chart(fig, use_container_width=True)
 else:
     if df_raw is None:
         st.error(f"CSV が見つかりません: {CSV_PATH}（repoの data/ に置いてください）")
