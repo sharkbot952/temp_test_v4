@@ -1148,7 +1148,7 @@ elif mode == "飼育":
                 gy = gdf[gdf["Year"] == y]
                 if gy.empty:
                     continue
-                # BW：24本（半月×12）にまとめた箱ひげ
+                # 24本（半月×12）にまとめてバイオリン表示
                 gy2 = gy.copy()
                 gy2["Month"] = gy2["Date"].dt.month
                 gy2["Day"] = gy2["Date"].dt.day
@@ -1163,22 +1163,24 @@ elif mode == "飼育":
                 if gy2.empty:
                     continue
 
-                # 箱ひげ本体（Hoverは無効化、点は出さない）
-                w_ms = 15 * 24 * 3600 * 1000 * 0.60
-                fig.add_trace(go.Box(
+                # バイオリン本体（Hoverは無効化）
+                fig.add_trace(go.Violin(
                     x=gy2["X"],
                     y=gy2["BW"].astype(float).values,
                     name=f"{y} BW",
                     yaxis="y3",
                     showlegend=False,
                     hoverinfo="skip",
-                    boxpoints=False,
-                    width=w_ms,
-                    marker=dict(color=rgba_from_color(colmap[y], 0.12)),
-                    line=dict(color=colmap[y], width=1.4),
+                    points=False,
+                    meanline_visible=False,
+                    line=dict(color=colmap[y], width=1.6),
+                    fillcolor=rgba_from_color(colmap[y], 0.22),
+                    opacity=0.65,
+                    scalemode="width",
+                    spanmode="hard",
                 ))
 
-                # Hoverは現場向けに min/median/max のみ（箱の上でも拾う）
+                # Hoverは現場向けに min/median/max のみ（バイオリン上でも拾う）
                 gq = gy2.groupby("X")["BW"].agg(lo="min", med="median", hi="max").reset_index().sort_values("X")
                 x = gq["X"].tolist()
                 _xh, _yh, _cd = [], [], []
@@ -1216,10 +1218,10 @@ elif mode == "飼育":
             yaxis=dict(title="累積1尾あたり給餌量 (g/尾)"),
             yaxis2=dict(title="水温 (℃)", overlaying="y", side="right", showgrid=False),
             yaxis3=dict(title="BW", overlaying="y", side="right", position=0.94, showgrid=False),
-        boxgap=0.02,
-        boxgroupgap=0.02,
+        violingap=0.02,
+        violingroupgap=0.02,
         )
-        fig.update_traces(hoverinfo="skip", selector=dict(type="box"))
+        fig.update_traces(hoverinfo="skip", selector=dict(type="violin"))
         st.plotly_chart(fig, use_container_width=True)
 
     with tab_food:
