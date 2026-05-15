@@ -975,14 +975,9 @@ elif mode == "飼育":
 
     default_years = years_avail[-2:] if len(years_avail) >= 2 else years_avail
 
-    # UI（wt_ikesu.py のレイアウト踏襲）
-
-    # UI（固定：飼育別系列=非表示、水温/BW=常にON、BWまとめ幅=5）
-    c0, c1 = st.columns([2.2, 2.2])
-    with c0:
-        sel_cages = st.multiselect("飼育（デフォルト全選択）", options=cages, default=cages)
-    with c1:
-        sel_years = st.multiselect("年（比較）", options=years_avail, default=default_years)
+    # UI（モバイル向け：飼育選択は非表示で全選択固定）
+    sel_cages = cages  # 全選択固定
+    sel_years = st.multiselect("年（比較）", options=years_avail, default=default_years)
 
     # 固定設定（UI非表示）
     show_cage_lines = False
@@ -990,7 +985,7 @@ elif mode == "飼育":
     show_bw = True
     bw_tol_days = 5
 
-    if not sel_cages or not sel_years:
+    if not sel_years:
         st.stop()
     def _align_md(dtindex: pd.DatetimeIndex) -> pd.DatetimeIndex:
         md = pd.to_datetime(dtindex)
@@ -1076,7 +1071,7 @@ elif mode == "飼育":
         if out is not None:
             series_by_year[y] = out
 
-    tab_per, tab_food = st.tabs(["累積1尾あたり給餌量（年比較）", "累積給餌量（参考）"])
+    tab_per, tab_food = st.tabs(["給餌量/尾（累積）", "早急餌料（参考）"])
 
     with tab_per:
         fig = go.Figure()
@@ -1096,7 +1091,7 @@ elif mode == "飼育":
                 y=yv,
                 mode="lines",
                 name=f"{y} 加重平均",
-                line=dict(color=colmap[y], width=3.8),
+                line=dict(color=colmap[y], width=3.0),
             ))
 
         if show_cage_lines:
@@ -1138,7 +1133,7 @@ elif mode == "飼育":
                     mode="lines",
                     name=f"{y} 水温",
                     yaxis="y2",
-                    line=dict(color=rgba_from_color(colmap[y], 0.65), width=2.0, dash="dot"),
+                    line=dict(color=rgba_from_color(colmap[y], 0.35), width=1.6, dash="dot"),
                     connectgaps=False,
                 ))
 
@@ -1148,7 +1143,7 @@ elif mode == "飼育":
                 gy = gdf[gdf["Year"] == y]
                 if gy.empty:
                     continue
-                # 24本（半月×12）にまとめてバイオリン表示
+                # BW：24本（半月×12）にまとめた箱ひげ
                 gy2 = gy.copy()
                 gy2["Month"] = gy2["Date"].dt.month
                 gy2["Day"] = gy2["Date"].dt.day
@@ -1163,24 +1158,22 @@ elif mode == "飼育":
                 if gy2.empty:
                     continue
 
-                # バイオリン本体（Hoverは無効化）
-                fig.add_trace(go.Violin(
+                # 箱ひげ本体（Hoverは無効化、点は出さない）
+                w_ms = 15 * 24 * 3600 * 1000 * 0.60
+                fig.add_trace(go.Box(
                     x=gy2["X"],
                     y=gy2["BW"].astype(float).values,
                     name=f"{y} BW",
                     yaxis="y3",
                     showlegend=False,
                     hoverinfo="skip",
-                    points=False,
-                    meanline_visible=False,
-                    line=dict(color=colmap[y], width=1.6),
-                    fillcolor=rgba_from_color(colmap[y], 0.22),
-                    opacity=0.65,
-                    scalemode="width",
-                    spanmode="hard",
+                    boxpoints=False,
+                    width=w_ms,
+                    marker=dict(color=rgba_from_color(colmap[y], 0.18)),
+                    line=dict(color=colmap[y], width=1.8),
                 ))
 
-                # Hoverは現場向けに min/median/max のみ（バイオリン上でも拾う）
+                # Hoverは現場向けに min/median/max のみ（箱の上でも拾う）
                 gq = gy2.groupby("X")["BW"].agg(lo="min", med="median", hi="max").reset_index().sort_values("X")
                 x = gq["X"].tolist()
                 _xh, _yh, _cd = [], [], []
@@ -1215,13 +1208,13 @@ elif mode == "飼育":
             margin=dict(l=40, r=40, t=40, b=90),
             legend=dict(orientation="h", yanchor="top", y=-0.22, xanchor="left", x=0),
             xaxis=dict(title="（月日）", tickformat="%m/%d"),
-            yaxis=dict(title="累積1尾あたり給餌量 (g/尾)"),
-            yaxis2=dict(title="水温 (℃)", overlaying="y", side="right", showgrid=False),
-            yaxis3=dict(title="BW", overlaying="y", side="right", position=0.94, showgrid=False),
-        violingap=0.02,
-        violingroupgap=0.02,
+            yaxis=dict(title="給餌量（g/尾）"),
+            yaxis2=dict(title="水温 (℃)", overlaying="y", side="right", position=0.92, showgrid=False),
+            yaxis3=dict(title="BW", overlaying="y", side="right", position=0.985, showgrid=False),
+            boxgap=0.02,
+            boxgroupgap=0.02,
         )
-        fig.update_traces(hoverinfo="skip", selector=dict(type="violin"))
+        fig.update_traces(hoverinfo="skip", selector=dict(type="box"))
         st.plotly_chart(fig, use_container_width=True)
 
     with tab_food:
