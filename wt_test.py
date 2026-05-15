@@ -1071,7 +1071,7 @@ elif mode == "飼育":
         if out is not None:
             series_by_year[y] = out
 
-    tab_per, tab_food = st.tabs(["給餌量/尾（累積）", "早急餌料（参考）"])
+    tab_per, tab_food = st.tabs(["給餌量/尾（累積）", "総給餌量（参考）"])
 
     with tab_per:
         fig = go.Figure()
@@ -1133,7 +1133,7 @@ elif mode == "飼育":
                     mode="lines",
                     name=f"{y} 水温",
                     yaxis="y2",
-                    line=dict(color=rgba_from_color(colmap[y], 0.35), width=1.6, dash="dot"),
+                    line=dict(color=rgba_from_color(colmap[y], 0.30), width=1.5, dash="dot"),
                     connectgaps=False,
                 ))
 
@@ -1143,7 +1143,7 @@ elif mode == "飼育":
                 gy = gdf[gdf["Year"] == y]
                 if gy.empty:
                     continue
-                # BW：24本（半月×12）にまとめた箱ひげ（枠線=固定グレー、中央値=年色）
+                # BW：24本（半月×12）にまとめた箱ひげ（枠線=固定グレー、塗り=年色薄め、中央値=年色）
                 gy2 = gy.copy()
                 gy2["Month"] = gy2["Date"].dt.month
                 gy2["Day"] = gy2["Date"].dt.day
@@ -1158,8 +1158,9 @@ elif mode == "飼育":
                 if gy2.empty:
                     continue
 
-                # 箱ひげ本体（枠線は固定グレー、塗りは薄いグレー）
-                w_ms = 15 * 24 * 3600 * 1000 * 0.60
+                # 箱ひげ本体（年数が多いときに重ならないよう幅を自動調整）
+                nY = max(1, len(years_sorted))
+                w_ms = (15 * 24 * 3600 * 1000) * (0.80 / nY)
                 fig.add_trace(go.Box(
                     x=gy2["X"],
                     y=gy2["BW"].astype(float).values,
@@ -1169,11 +1170,12 @@ elif mode == "飼育":
                     hoverinfo="skip",
                     boxpoints=False,
                     width=w_ms,
-                    marker=dict(color="rgba(120,120,120,0.12)"),
-                    line=dict(color="#777777", width=1.6),
+                    offsetgroup=str(y),
+                    marker=dict(color=rgba_from_color(colmap[y], 0.10)),
+                    line=dict(color="#777777", width=1.4),
                 ))
 
-                # 中央値線（年色）：半月幅の水平線
+                # 中央値線（年色）：箱の幅に合わせた水平線
                 med_df = gy2.groupby("X")["BW"].median().reset_index().sort_values("X")
                 dt_half = pd.to_timedelta(w_ms * 0.45, unit='ms')
                 _xm, _ym = [], []
@@ -1187,7 +1189,7 @@ elif mode == "飼育":
                     yaxis="y3",
                     showlegend=False,
                     hoverinfo="skip",
-                    line=dict(color=colmap[y], width=2.4),
+                    line=dict(color=colmap[y], width=2.2),
                 ))
 
                 # Hoverは現場向けに min/median/max のみ（箱の上でも拾う）
@@ -1224,12 +1226,10 @@ elif mode == "飼育":
             hovermode="x unified",
             margin=dict(l=40, r=40, t=40, b=90),
             legend=dict(orientation="h", yanchor="top", y=-0.22, xanchor="left", x=0),
-            xaxis=dict(title="（月日）", tickformat="%m/%d"),
+            xaxis=dict(title="（月日）", tickformat="%m/%d", range=["2001-05-01","2001-12-31"]),
             yaxis=dict(title="給餌量（g/尾）"),
             yaxis2=dict(title="水温 (℃)", overlaying="y", side="right", position=0.92, showgrid=False),
             yaxis3=dict(title="BW", overlaying="y", side="right", position=0.985, showgrid=False),
-            boxgap=0.02,
-            boxgroupgap=0.02,
         )
         fig.update_traces(hoverinfo="skip", selector=dict(type="box"))
         st.plotly_chart(fig, use_container_width=True)
@@ -1261,7 +1261,7 @@ elif mode == "飼育":
             hovermode="x unified",
             margin=dict(l=40, r=40, t=40, b=90),
             legend=dict(orientation="h", yanchor="top", y=-0.22, xanchor="left", x=0),
-            xaxis=dict(title="（月日）", tickformat="%m/%d"),
+            xaxis=dict(title="（月日）", tickformat="%m/%d", range=["2001-05-01","2001-12-31"]),
             yaxis=dict(title="累積給餌量 (g)"),
         )
         st.plotly_chart(fig, use_container_width=True)
