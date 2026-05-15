@@ -1071,7 +1071,7 @@ elif mode == "飼育":
         if out is not None:
             series_by_year[y] = out
 
-    tab_per, tab_food = st.tabs(["給餌量/尾（累積）", "総給餌量（参考）"])
+    tab_per, tab_food = st.tabs(["給餌量/尾（累計）", "給餌量（参考）"])
 
     with tab_per:
         fig = go.Figure()
