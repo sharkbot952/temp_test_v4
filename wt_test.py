@@ -1071,7 +1071,7 @@ elif mode == "飼育":
         if out is not None:
             series_by_year[y] = out
 
-    tab_per, tab_food = st.tabs(["給餌量/尾（累積）", "総給餌料（参考）"])
+    tab_per, tab_food = st.tabs(["給餌量/尾（累積）", "早急餌料（参考）"])
 
     with tab_per:
         fig = go.Figure()
@@ -1143,7 +1143,7 @@ elif mode == "飼育":
                 gy = gdf[gdf["Year"] == y]
                 if gy.empty:
                     continue
-                # BW：24本（半月×12）にまとめた箱ひげ
+                # BW：24本（半月×12）にまとめた箱ひげ（枠線=固定グレー、中央値=年色）
                 gy2 = gy.copy()
                 gy2["Month"] = gy2["Date"].dt.month
                 gy2["Day"] = gy2["Date"].dt.day
@@ -1158,7 +1158,7 @@ elif mode == "飼育":
                 if gy2.empty:
                     continue
 
-                # 箱ひげ本体（Hoverは無効化、点は出さない）
+                # 箱ひげ本体（枠線は固定グレー、塗りは薄いグレー）
                 w_ms = 15 * 24 * 3600 * 1000 * 0.60
                 fig.add_trace(go.Box(
                     x=gy2["X"],
@@ -1169,8 +1169,25 @@ elif mode == "飼育":
                     hoverinfo="skip",
                     boxpoints=False,
                     width=w_ms,
-                    marker=dict(color=rgba_from_color(colmap[y], 0.18)),
-                    line=dict(color=colmap[y], width=1.8),
+                    marker=dict(color="rgba(120,120,120,0.12)"),
+                    line=dict(color="#777777", width=1.6),
+                ))
+
+                # 中央値線（年色）：半月幅の水平線
+                med_df = gy2.groupby("X")["BW"].median().reset_index().sort_values("X")
+                dt_half = pd.to_timedelta(w_ms * 0.45, unit='ms')
+                _xm, _ym = [], []
+                for _x0, _m in zip(med_df["X"].tolist(), med_df["BW"].astype(float).tolist()):
+                    _xm += [(_x0 - dt_half), (_x0 + dt_half), None]
+                    _ym += [_m, _m, None]
+                fig.add_trace(go.Scatter(
+                    x=_xm,
+                    y=_ym,
+                    mode="lines",
+                    yaxis="y3",
+                    showlegend=False,
+                    hoverinfo="skip",
+                    line=dict(color=colmap[y], width=2.4),
                 ))
 
                 # Hoverは現場向けに min/median/max のみ（箱の上でも拾う）
