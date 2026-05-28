@@ -229,7 +229,12 @@ def build_month_dekad_by_year(df, month, years):
 @st.cache_data(show_spinner="データ読み込み中...", ttl=600)
 def load_raw(csv_path: Path, _hash_val: str):
     df = pd.read_csv(str(csv_path), encoding=ENCODING)
+
     df[DATE_COL] = pd.to_datetime(df[DATE_COL], errors="coerce")
+
+    # ★追加（これが本質）
+    df[DATE_COL] = df[DATE_COL].dt.round("30min")
+
     df = df.dropna(subset=[DATE_COL]).copy()
 
     df["1m_avg"] = safe_row_mean(df, ["1m(UML)", "1m(Tele)"])
