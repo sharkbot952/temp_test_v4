@@ -336,6 +336,10 @@ def load_growth_data(csv_path: Path, _hash_val: str) -> pd.DataFrame:
             s = s.replace({"ND": None, "欠測": None, "nan": None, "": None})
             df[c] = pd.to_numeric(s, errors="coerce")
 
+    if "Remark" in df.columns:
+        r = df["Remark"].astype(str).str.strip()
+        df["Remark"] = r.replace({"": np.nan, "nan": np.nan, "None": np.nan})
+
     return df
 def pick_coord(ds, candidates):
     for c in candidates:
@@ -1144,11 +1148,28 @@ elif mode == "飼育":
 
         if show_bw and (gdf_all is not None) and (not gdf_all.empty) and ("BW" in gdf_all.columns):
             gdf = gdf_all.dropna(subset=["BW", "Date", "Year"]).copy()
+            if "Remark" in gdf.columns:
+                gdf["Remark"] = gdf["Remark"].astype(str).str.strip()
+                gdf["Remark"] = gdf["Remark"].replace({"": np.nan, "nan": np.nan, "None": np.nan})
+            else:
+                gdf["Remark"] = np.nan
+
+            # 半月単位は維持しつつ、Remarkがある半月はRemark別、ない半月は合計で表示
+            all_remark_vals = sorted([str(v) for v in gdf["Remark"].dropna().unique().tolist()])
+            remark_order = [v for v in all_remark_vals if v not in ["", "nan", "None"]]
+            if not remark_order:
+                remark_order = ["合計"]
+            nR = max(1, len(remark_order))
+            total_span_days = 0.72
+            step_days = total_span_days / nR
+            day_offsets = {lab: (i - (nR - 1) / 2.0) * step_days for i, lab in enumerate(remark_order)}
+            width_ms = int(step_days * 24 * 3600 * 1000 * 0.78)
+
             for y in years_sorted:
                 gy = gdf[gdf["Year"] == y]
                 if gy.empty:
                     continue
-                # BW：24本（半月×12）にまとめた箱ひげ（枠線=固定グレー、塗り=年色薄め、中央値=年色）
+
                 gy2 = gy.copy()
                 gy2["Month"] = gy2["Date"].dt.month
                 gy2["Day"] = gy2["Date"].dt.day
@@ -1158,73 +1179,97 @@ elif mode == "飼育":
 
                 half = (gy2["Day"] >= 16).astype(int)  # 0=前半, 1=後半
                 center_day = np.where(half.values == 0, 8, 23)
-                gy2["X"] = pd.to_datetime(dict(year=2001, month=gy2["Month"], day=center_day))
-                gy2 = gy2.dropna(subset=["X", "BW"]).copy()
+                gy2["XBase"] = pd.to_datetime(dict(year=2001, month=gy2["Month"], day=center_day))
+                gy2 = gy2.dropna(subset=["XBase", "BW"]).copy()
                 if gy2.empty:
                     continue
 
-                # 箱ひげ本体（年数が多いときに重ならないよう幅を自動調整）
-                nY = max(1, len(years_sorted))
-                w_ms = (15 * 24 * 3600 * 1000) * (0.80 / nY)
-                fig.add_trace(go.Box(
-                    x=gy2["X"],
-                    y=gy2["BW"].astype(float).values,
-                    name=f"{y} BW",
-                    yaxis="y3",
-                    showlegend=False,
-                    hoverinfo="skip",
-                    boxpoints=False,
-                    width=w_ms,
-                    offsetgroup=str(y),
-                    marker=dict(color=rgba_from_color(colmap[y], 0.10)),
-                    line=dict(color="#777777", width=1.4),
-                ))
+                # 半月グループごとに、RemarkがあればRemark別のみ、なければ合計のみ
+                pieces = []
+                for x0, ghalf in gy2.groupby("XBase", sort=True):
+                    nonnull = sorted([str(v) for v in ghalf["Remark"].dropna().unique().tolist()])
+                    if nonnull:
+                        for lab in nonnull:
+                            gsub = ghalf[ghalf["Remark"] == lab].copy()
+                            if gsub.empty:
+                                continue
+                            gsub["RemarkGroup"] = lab
+                            gsub["X"] = x0 + pd.to_timedelta(day_offsets.get(lab, 0.0), unit="D")
+                            pieces.append(gsub)
+                    else:
+                        gsub = ghalf.copy()
+                        gsub["RemarkGroup"] = "合計"
+                        gsub["X"] = x0
+                        pieces.append(gsub)
 
-                # 中央値線（年色）：箱の幅に合わせた水平線
-                med_df = gy2.groupby("X")["BW"].median().reset_index().sort_values("X")
-                dt_half = pd.to_timedelta(w_ms * 0.45, unit='ms')
-                _xm, _ym = [], []
-                for _x0, _m in zip(med_df["X"].tolist(), med_df["BW"].astype(float).tolist()):
-                    _xm += [(_x0 - dt_half), (_x0 + dt_half), None]
-                    _ym += [_m, _m, None]
-                fig.add_trace(go.Scatter(
-                    x=_xm,
-                    y=_ym,
-                    mode="lines",
-                    yaxis="y3",
-                    showlegend=False,
-                    hoverinfo="skip",
-                    line=dict(color=colmap[y], width=2.2),
-                ))
+                if not pieces:
+                    continue
+                gy3 = pd.concat(pieces, axis=0, ignore_index=False)
 
-                # Hoverは現場向けに min/median/max のみ（箱の上でも拾う）
-                gq = gy2.groupby("X")["BW"].agg(lo="min", med="median", hi="max").reset_index().sort_values("X")
-                x = gq["X"].tolist()
-                _xh, _yh, _cd = [], [], []
-                for _x0, _lo, _med, _hi in zip(
-                    x,
-                    gq["lo"].astype(float).tolist(),
-                    gq["med"].astype(float).tolist(),
-                    gq["hi"].astype(float).tolist(),
-                ):
-                    _xh += [_x0, _x0, None]
-                    _yh += [_lo, _hi, None]
-                    _cd += [[_lo, _med, _hi], [_lo, _med, _hi], [None, None, None]]
-                fig.add_trace(go.Scatter(
-                    x=_xh,
-                    y=_yh,
-                    mode="lines",
-                    yaxis="y3",
-                    showlegend=False,
-                    line=dict(width=44, color="rgba(0,0,0,0)"),
-                    customdata=_cd,
-                    hovertemplate=(
-                        f"{y} BW<br>" +
-                        "%{x|%m/%d}<br>" +
-                        "min=%{customdata[0]:.0f}  median=%{customdata[1]:.0f}  max=%{customdata[2]:.0f}" +
-                        "<extra></extra>"
-                    ),
-                ))
+                # BW箱ひげ本体（凡例は年だけにしたいので非表示）
+                for lab, gsub in gy3.groupby("RemarkGroup", sort=False):
+                    if gsub.empty:
+                        continue
+                    fill_alpha = 0.10 if lab == "合計" else 0.18
+                    fig.add_trace(go.Box(
+                        x=gsub["X"],
+                        y=gsub["BW"].astype(float).values,
+                        name=f"{y} BW",
+                        yaxis="y3",
+                        showlegend=False,
+                        hoverinfo="skip",
+                        boxpoints=False,
+                        width=width_ms,
+                        marker=dict(color=rgba_from_color(colmap[y], fill_alpha)),
+                        line=dict(color="#777777", width=1.4),
+                    ))
+
+                    # 中央値線（年色）：箱の幅に合わせた水平線
+                    med_df = gsub.groupby("X")["BW"].median().reset_index().sort_values("X")
+                    dt_half = pd.to_timedelta(width_ms * 0.45, unit='ms')
+                    _xm, _ym = [], []
+                    for _x0, _m in zip(med_df["X"].tolist(), med_df["BW"].astype(float).tolist()):
+                        _xm += [(_x0 - dt_half), (_x0 + dt_half), None]
+                        _ym += [_m, _m, None]
+                    fig.add_trace(go.Scatter(
+                        x=_xm,
+                        y=_ym,
+                        mode="lines",
+                        yaxis="y3",
+                        showlegend=False,
+                        hoverinfo="skip",
+                        line=dict(color=colmap[y], width=2.2),
+                    ))
+
+                    # Hoverは半月位置の箱ごとに min/median/max + Remark
+                    gq = gsub.groupby("X")["BW"].agg(lo="min", med="median", hi="max").reset_index().sort_values("X")
+                    x = gq["X"].tolist()
+                    _xh, _yh, _cd = [], [], []
+                    for _x0, _lo, _med, _hi in zip(
+                        x,
+                        gq["lo"].astype(float).tolist(),
+                        gq["med"].astype(float).tolist(),
+                        gq["hi"].astype(float).tolist(),
+                    ):
+                        _xh += [_x0, _x0, None]
+                        _yh += [_lo, _hi, None]
+                        _cd += [[lab, _lo, _med, _hi], [lab, _lo, _med, _hi], [None, None, None, None]]
+                    fig.add_trace(go.Scatter(
+                        x=_xh,
+                        y=_yh,
+                        mode="lines",
+                        yaxis="y3",
+                        showlegend=False,
+                        line=dict(width=44, color="rgba(0,0,0,0)"),
+                        customdata=_cd,
+                        hovertemplate=(
+                            f"{y} BW<br>"
+                            + "区分=%{customdata[0]}<br>"
+                            + "%{x|%m/%d}<br>"
+                            + "min=%{customdata[1]:.0f}  median=%{customdata[2]:.0f}  max=%{customdata[3]:.0f}"
+                            + "<extra></extra>"
+                        ),
+                    ))
         fig.update_layout(
             template="plotly_white",
             height=660,
