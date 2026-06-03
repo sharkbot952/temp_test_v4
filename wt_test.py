@@ -1159,11 +1159,15 @@ elif mode == "飼育":
             remark_order = [v for v in all_remark_vals if v not in ["", "nan", "None"]]
             if not remark_order:
                 remark_order = ["合計"]
+
             nR = max(1, len(remark_order))
             total_span_days = 0.72
-            step_days = total_span_days / nR
-            day_offsets = {lab: (i - (nR - 1) / 2.0) * step_days for i, lab in enumerate(remark_order)}
-            width_ms = int(step_days * 24 * 3600 * 1000 * 0.78)
+            offset_step_days = total_span_days / nR
+            day_offsets = {lab: (i - (nR - 1) / 2.0) * offset_step_days for i, lab in   enumerate(remark_order)}
+
+            # 箱の幅は従来寄りに固定し、分割時は位置だけ少しずらす
+            width_ms = int((15 * 24 * 3600 * 1000) * (0.80 / max(1, len(years_sorted))))
+
 
             for y in years_sorted:
                 gy = gdf[gdf["Year"] == y]
