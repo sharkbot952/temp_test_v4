@@ -5,10 +5,30 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 import streamlit as st
+from streamlit.components.v1 import html as st_html
 import plotly.graph_objects as go
 import plotly.express as px
 
 st.set_page_config(page_title="", layout="wide")
+
+st_html("""
+<script>
+const id = "trial-note-fixed";
+if (!window.parent.document.getElementById(id)) {
+  const div = window.parent.document.createElement("div");
+  div.id = id;
+  div.innerText = "※試験・関係者限定";
+  div.style.position = "fixed";
+  div.style.top = "6px";
+  div.style.left = "10px";
+  div.style.fontSize = "12px";
+  div.style.color = "rgba(120,120,120,0.8)";
+  div.style.zIndex = "999999";
+  div.style.pointerEvents = "none";
+  window.parent.document.body.appendChild(div);
+}
+</script>
+""", height=0)
 
 APP_DIR = Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"
