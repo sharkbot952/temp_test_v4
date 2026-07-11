@@ -1,6 +1,7 @@
-streamlit
-pandas
-numpy
-plotly
-xarray
-netcdf4
+streamlit==1.59.1
+pandas==3.0.3
+numpy==2.5.1
+plotly==6.9.0
+xarray==2026.7.0
+netcdf4==1.7.4
+cftime==1.6.5
